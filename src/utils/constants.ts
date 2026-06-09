@@ -81,16 +81,22 @@ export const SORT_CODES: Record<number, Record<string, string>> = {
   },
 };
 
-// Real estate category paths
+// Real estate category landing paths. willhaben splits buy vs rent across
+// *different* URL slugs (e.g. houses for sale live under `haus-kaufen/...`,
+// rentals under `haus-mieten/...`). Every path below is verified live against a
+// 200 + non-zero result count — see REAL_ESTATE_PATHS in search.ts for the
+// property-type/action resolver that produces these.
 export const REAL_ESTATE_CATEGORIES: Record<string, { path: string; name: string }> = {
   eigentumswohnung_kaufen: { path: "eigentumswohnung/eigentumswohnung-angebote", name: "Eigentumswohnung kaufen" },
-  haus_kaufen: { path: "haus/haus-angebote", name: "Haus kaufen" },
-  mietwohnung: { path: "mietwohnung/mietwohnung-angebote", name: "Mietwohnung" },
-  haus_mieten: { path: "haus/haus-mieten", name: "Haus mieten" },
-  wohnung_mieten: { path: "wohnung-mieten", name: "Wohnung mieten" },
-  grundstueck: { path: "grundstueck/grundstueck-angebote", name: "Grundstück" },
-  buero_gewerbe: { path: "buero-gewerbeimmobilie/buero-gewerbeimmobilie-angebote", name: "Büro & Gewerbe" },
-  bauprojekt: { path: "bauprojekt/bauprojekt-angebote", name: "Bauprojekt" },
+  haus_kaufen: { path: "haus-kaufen/haus-angebote", name: "Haus kaufen" },
+  grundstueck_kaufen: { path: "grundstuecke/grundstueck-angebote", name: "Grundstück kaufen" },
+  gewerbe_kaufen: { path: "gewerbeimmobilien-kaufen/gewerbeimmobilien-angebote", name: "Gewerbeimmobilie kaufen" },
+  ferienimmobilie_kaufen: { path: "ferienimmobilien-kaufen/ferienimmobilien-angebote", name: "Ferienimmobilie kaufen" },
+  mietwohnung: { path: "mietwohnungen/mietwohnung-angebote", name: "Mietwohnung (Wohnung mieten)" },
+  haus_mieten: { path: "haus-mieten/haus-angebote", name: "Haus mieten" },
+  gewerbe_mieten: { path: "gewerbeimmobilien-mieten/gewerbeimmobilien-angebote", name: "Gewerbeimmobilie mieten" },
+  ferienimmobilie_mieten: { path: "ferienimmobilien-mieten/ferienimmobilien-angebote", name: "Ferienimmobilie mieten" },
+  neubauprojekt: { path: "neubauprojekte/angebote", name: "Neubauprojekt" },
 };
 
 // Car filter parameter names (for URL query params)

@@ -45,6 +45,15 @@ Tests hit the live site, so failures can be network/markup drift — check befor
   auto/landing pages use `props.pageProps.initialSearchResult`; detail pages use `advertDetails`.
   `scrapeSearchResults` already handles the first two.
 - **Auto search URL needs the `/iad/` prefix:** `/iad/gebrauchtwagen/auto/gebrauchtwagenboerse`.
+- **Real-estate buy/rent live under *different* slugs, and willhaben renamed several** (the old
+  `haus/haus-angebote`, `mietwohnung/…`, `haus/haus-mieten` now **404**). Verified live paths
+  (200 + non-zero count), resolved by `resolveRealEstateCategory` in `search.ts`:
+  - Wohnung: buy `eigentumswohnung/eigentumswohnung-angebote` · rent `mietwohnungen/mietwohnung-angebote`
+  - Haus: buy `haus-kaufen/haus-angebote` · rent `haus-mieten/haus-angebote`
+  - Grundstück: `grundstuecke/grundstueck-angebote` (no separate rental slug)
+  - Gewerbe: buy `gewerbeimmobilien-kaufen/gewerbeimmobilien-angebote` · rent `gewerbeimmobilien-mieten/gewerbeimmobilien-angebote`
+  - Neubau: `neubauprojekte/angebote`. Re-probe with a trailing-slash landing (`/iad/immobilien/`)
+    if these drift again — that page's nav JSON is the source of truth for current slugs.
 - **Verified willhaben query-param names** (tested live against result counts):
   - Price: `PRICE_FROM` / `PRICE_TO` (real estate, cars, marketplace)
   - Real estate: `NUMBER_OF_ROOMS`, `ESTATE_SIZE/LIVING_AREA_FROM` / `…_TO`

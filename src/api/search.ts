@@ -153,47 +153,67 @@ export async function searchListings(input: SearchInput) {
 }
 
 /**
+ * willhaben puts each property type's buy and rent listings under *separate*
+ * URL slugs (and renamed several of them — `haus/haus-angebote` etc. now 404).
+ * Every path here is verified live (200 + non-zero rowsFound). The key is a
+ * canonical property type; `resolveRealEstateCategory` maps user aliases onto it.
+ */
+const REAL_ESTATE_PATHS: Record<string, { buy: string; rent: string }> = {
+  wohnung: {
+    buy: "eigentumswohnung/eigentumswohnung-angebote",
+    rent: "mietwohnungen/mietwohnung-angebote",
+  },
+  haus: {
+    buy: "haus-kaufen/haus-angebote",
+    rent: "haus-mieten/haus-angebote",
+  },
+  grundstueck: {
+    // willhaben has no separate rental-land category; both resolve to the same landing.
+    buy: "grundstuecke/grundstueck-angebote",
+    rent: "grundstuecke/grundstueck-angebote",
+  },
+  gewerbe: {
+    buy: "gewerbeimmobilien-kaufen/gewerbeimmobilien-angebote",
+    rent: "gewerbeimmobilien-mieten/gewerbeimmobilien-angebote",
+  },
+  ferien: {
+    buy: "ferienimmobilien-kaufen/ferienimmobilien-angebote",
+    rent: "ferienimmobilien-mieten/ferienimmobilien-angebote",
+  },
+  neubauprojekt: {
+    // Projects aren't split by buy/rent.
+    buy: "neubauprojekte/angebote",
+    rent: "neubauprojekte/angebote",
+  },
+};
+
+/** Map a free-text property type + action onto a verified willhaben category path. */
+export function resolveRealEstateCategory(propertyType: string | undefined, action: "buy" | "rent"): string {
+  const t = (propertyType ?? "").trim().toLowerCase();
+
+  const alias: Record<string, string> = {
+    eigentumswohnung: "wohnung", wohnung: "wohnung", apartment: "wohnung", flat: "wohnung",
+    mietwohnung: "wohnung", rental: "wohnung",
+    haus: "haus", house: "haus", einfamilienhaus: "haus",
+    grundstueck: "grundstueck", "grundstück": "grundstueck", land: "grundstueck", plot: "grundstueck",
+    buero: "gewerbe", "büro": "gewerbe", gewerbe: "gewerbe", office: "gewerbe", commercial: "gewerbe",
+    ferien: "ferien", ferienimmobilie: "ferien", holiday: "ferien",
+    neubau: "neubauprojekt", neubauprojekt: "neubauprojekt", bauprojekt: "neubauprojekt", projekt: "neubauprojekt", project: "neubauprojekt",
+  };
+
+  // `mietwohnung`/`rental` as a property type implies renting regardless of `action`.
+  const act: "buy" | "rent" = (t === "mietwohnung" || t === "rental") ? "rent" : action;
+  const key = alias[t] ?? "wohnung";
+  return REAL_ESTATE_PATHS[key][act];
+}
+
+/**
  * Search real estate listings
  */
 export async function searchRealEstate(input: RealEstateSearchInput) {
   const { property_type, action = "buy", location, price_from, price_to, rooms, area_from, area_to, sort, rows = 30, page = 1 } = input;
 
-  // Determine the category path
-  let categoryPath = "eigentumswohnung/eigentumswohnung-angebote"; // default
-
-  if (property_type) {
-    // Map common property types to their URL paths
-    const typeMap: Record<string, string> = {
-      eigentumswohnung: "eigentumswohnung",
-      wohnung: "eigentumswohnung",
-      apartment: "eigentumswohnung",
-      haus: "haus",
-      house: "haus",
-      mietwohnung: "mietwohnung",
-      rental: "mietwohnung",
-      grundstueck: "grundstueck",
-      buero: "buero-gewerbeimmobilie",
-      gewerbe: "buero-gewerbeimmobilie",
-    };
-
-    const mapped = typeMap[property_type.toLowerCase()];
-    if (mapped) {
-      // Construct the full category path based on buy/rent
-      if (action === "rent") {
-        if (mapped === "eigentumswohnung") {
-          categoryPath = "mietwohnung/mietwohnung-angebote";
-        } else if (mapped === "haus") {
-          categoryPath = "haus/haus-mieten";
-        } else {
-          categoryPath = `${mapped}/${mapped}-angebote`;
-        }
-      } else {
-        categoryPath = `${mapped}/${mapped}-angebote`;
-      }
-    }
-  } else if (action === "rent") {
-    categoryPath = "mietwohnung/mietwohnung-angebote";
-  }
+  const categoryPath = resolveRealEstateCategory(property_type, action === "rent" ? "rent" : "buy");
 
   const params: Record<string, string> = {
     rows: String(rows),
