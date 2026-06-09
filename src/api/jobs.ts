@@ -1,0 +1,151 @@
+// Willhaben Jobs API - Uses publicapi.willhaben.at (no scraping needed)
+import { WillhabenJobsSearchResult, WillhabenJobAd, SimplifiedListing } from "./types.js";
+import { fetchPublicApi, scrapeSearchResults } from "./scraper.js";
+
+/**
+ * Simplify a job ad into a clean, readable format
+ */
+function simplifyJobAd(ad: WillhabenJobAd): SimplifiedListing {
+  const attrs: Record<string, string | string[]> = {};
+  if (ad.attributes) {
+    for (const attr of ad.attributes) {
+      attrs[attr.name] = attr.values.length === 1 ? attr.values[0] : attr.values;
+    }
+  }
+
+  const url = `https://www.willhaben.at/iad/job/${ad.id}`;
+  const title = ad.description ?? "";
+  const location = (attrs.LOCATION as string) ?? null;
+  const orgName = (attrs.ORGNAME as string) ?? null;
+  const published = (attrs.PUBLISHED_String as string) ?? (attrs.PUBLISHED as string) ?? null;
+  const imageUrl = ad.advertImageList?.mainImageUrl ?? ad.advertImageList?.referenceImageUrl ?? null;
+
+  return {
+    id: ad.id,
+    title,
+    price: null,
+    price_number: null,
+    location,
+    url,
+    image_url: imageUrl,
+    published,
+    attributes: attrs,
+    vertical: "Jobs",
+    is_private: false,
+    advertiser_name: orgName,
+  };
+}
+
+/**
+ * Search job listings using the public API
+ */
+export async function searchJobs(input: {
+  keyword?: string;
+  job_type?: string;
+  sort?: string;
+  rows?: number;
+  page?: number;
+}) {
+  const { keyword, job_type, sort = "newest", rows = 30, page = 1 } = input;
+
+  const params = new URLSearchParams();
+  params.set("rows", String(rows));
+  params.set("page", String(page));
+
+  // Sort codes for jobs
+  const sortMap: Record<string, string> = {
+    newest: "1",
+    nearby: "2",
+  };
+  const sortCode = sortMap[sort] ?? sortMap.newest;
+  params.set("sort", sortCode);
+
+  // Keyword search
+  if (keyword) {
+    params.set("keyword", keyword);
+  }
+
+  // Job type filter
+  if (job_type) {
+    params.set("JOB_TYPE", job_type);
+  }
+
+  const urlPath = `/jobs/v2/adverts?${params.toString()}`;
+
+  try {
+    const result = await fetchPublicApi<WillhabenJobsSearchResult>(urlPath);
+
+    const listings = (result.advertSummaryList ?? []).map(simplifyJobAd);
+
+    return {
+      total: result.rowsFound,
+      page: result.pageRequested ?? page,
+      rows_per_page: result.rowsRequested ?? rows,
+      listings,
+      vertical: "jobs",
+      description: result.searchTitle,
+    };
+  } catch (error) {
+    // Fallback: try scraping the jobs page
+    return searchJobsViaScraping(keyword, rows, page);
+  }
+}
+
+/**
+ * Fallback: Search jobs via page scraping
+ */
+async function searchJobsViaScraping(keyword?: string, rows: number = 30, page: number = 1) {
+  const params = new URLSearchParams();
+  params.set("rows", String(rows));
+  params.set("page", String(page));
+  if (keyword) params.set("keyword", keyword);
+
+  const urlPath = `/iad/stellenmarkt?${params.toString()}`;
+  const { result } = await scrapeSearchResults(urlPath);
+
+  if (!result) {
+    return { total: 0, page, rows_per_page: rows, listings: [], vertical: "jobs" };
+  }
+
+  const listings = (result.advertSummaryList?.advertSummary ?? []).map((ad) => {
+    const attrs: Record<string, string | string[]> = {};
+    if (ad.attributes?.attribute) {
+      for (const attr of ad.attributes.attribute) {
+        attrs[attr.name] = attr.values.length === 1 ? attr.values[0] : attr.values;
+      }
+    }
+
+    const seoUrl = attrs.SEO_URL as string | undefined;
+    const url = seoUrl ? `https://www.willhaben.at/iad/${seoUrl}` : `https://www.willhaben.at/iad/object?adId=${ad.id}`;
+    const mainImage = ad.advertImageList?.advertImage?.[0];
+    const imageUrl = mainImage?.mainImageUrl ?? mainImage?.referenceImageUrl ?? null;
+    const heading = attrs.HEADING as string | undefined;
+    const location = (attrs.LOCATION as string) ?? null;
+    const orgName = attrs.ORGNAME as string | undefined;
+    const published = attrs.PUBLISHED_String as string | undefined;
+
+    return {
+      id: ad.id,
+      title: heading ?? ad.description ?? "",
+      price: null,
+      price_number: null,
+      location,
+      url,
+      image_url: imageUrl,
+      published,
+      attributes: attrs,
+      vertical: "Jobs",
+      is_private: attrs.ISPRIVATE === "1",
+      advertiser_name: orgName ?? null,
+    } as SimplifiedListing;
+  });
+
+  return {
+    total: result.rowsFound,
+    page: result.pageRequested,
+    rows_per_page: result.rowsRequested,
+    listings,
+    vertical: "jobs",
+    description: result.description,
+  };
+}
