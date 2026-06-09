@@ -145,44 +145,31 @@ export const CONDITION_IDS: Record<string, string> = {
   year_old: "50",
 };
 
-// Marketplace category IDs (subset of most popular)
-export const MARKETPLACE_CATEGORIES: Record<string, number> = {
-  // Top-level
-  all: 0,
-  // Baby & Kind
-  baby_kind: 3928,
-  // Beauty & Gesundheit
-  beauty_gesundheit: 3076,
-  // Bücher & Medien
-  buecher_medien: 387,
-  // Computer & Software
-  computer_tablets: 5828,
-  // Dienstleistungen
-  dienstleistungen: 537,
-  // Fahrräder & Radsport
-  fahrraeder: 4525,
-  // Games & Konsolen
-  games_konsolen: 2785,
-  // Haus & Garten
-  haus_garten: 3541,
-  // Kameras & TV
-  kameras_tv: 6808,
-  // KFZ-Zubehör & Motorradteile
-  kfz_zubehoer: 6142,
-  // Mode & Accessoires
-  mode_accessoires: 3275,
-  // Smartphones & Telefonie
-  smartphones: 2691,
-  // Spielzeug
-  spielzeug: 5136,
-  // Sport & Sportgeräte
-  sport: 4390,
-  // Tiere & Tierbedarf
-  tiere: 4915,
-  // Uhren & Schmuck
-  uhren_schmuck: 2409,
-  // Wohnen & Haushalt
-  wohnen_haushalt: 5387,
+// Marketplace top-level categories. The `path` is the URL slug segment under
+// /iad/kaufen-und-verkaufen/marktplatz/ — it must be the full slug (name + ID);
+// a bare numeric ID returns 200 but silently ignores the filter (whole-market
+// rowsFound). All slugs taken from the live marketplace landing-page nav.
+export const MARKETPLACE_CATEGORIES: Record<string, { path: string; name: string }> = {
+  antiquitaeten_kunst: { path: "antiquitaeten-kunst-6941", name: "Antiquitäten & Kunst" },
+  baby_kind: { path: "baby-kind-3928", name: "Baby & Kind" },
+  beauty_gesundheit: { path: "beauty-gesundheit-wellness-3076", name: "Beauty, Gesundheit & Wellness" },
+  boote: { path: "boote-yachten-jetskis-5007823", name: "Boote, Yachten & Jetskis" },
+  buecher_filme_musik: { path: "buecher-filme-musik-387", name: "Bücher, Filme & Musik" },
+  computer_software: { path: "computer-software-5824", name: "Computer & Software" },
+  dienstleistungen: { path: "dienstleistungen-537", name: "Dienstleistungen" },
+  fahrraeder: { path: "fahrraeder-radsport-4525", name: "Fahrräder & Radsport" },
+  freizeit: { path: "freizeit-instrumente-kulinarik-6462", name: "Freizeit, Instrumente & Kulinarik" },
+  games_konsolen: { path: "games-konsolen-2785", name: "Games & Konsolen" },
+  haus_garten: { path: "haus-garten-werkstatt-3541", name: "Haus, Garten & Werkstatt" },
+  kameras_tv: { path: "kameras-tv-multimedia-6808", name: "Kameras, TV & Multimedia" },
+  kfz_zubehoer: { path: "kfz-zubehoer-motorradteile-6142", name: "KFZ-Zubehör & Motorradteile" },
+  mode_accessoires: { path: "mode-accessoires-3275", name: "Mode & Accessoires" },
+  smartphones: { path: "smartphones-telefonie-2691", name: "Smartphones & Telefonie" },
+  spielzeug: { path: "spielen-spielzeug-5136", name: "Spielen & Spielzeug" },
+  sport: { path: "sport-sportgeraete-4390", name: "Sport & Sportgeräte" },
+  tiere: { path: "tiere-tierbedarf-4915", name: "Tiere & Tierbedarf" },
+  uhren_schmuck: { path: "uhren-schmuck-2409", name: "Uhren & Schmuck" },
+  wohnen_haushalt: { path: "wohnen-haushalt-gastronomie-5387", name: "Wohnen, Haushalt & Gastronomie" },
 };
 
 // Vertical display names

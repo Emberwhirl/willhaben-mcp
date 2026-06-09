@@ -7,15 +7,26 @@ interface CacheEntry {
   timestamp: number;
 }
 
-// Simple in-memory cache
+// Simple in-memory cache, bounded so a long-running session with many unique
+// searches doesn't grow without limit (expired entries are also evicted on read).
+const CACHE_MAX_ENTRIES = 100;
 const cache = new Map<string, CacheEntry>();
+
+function cacheSet(key: string, data: unknown): void {
+  if (cache.size >= CACHE_MAX_ENTRIES && !cache.has(key)) {
+    // Map iterates in insertion order, so the first key is the oldest entry.
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, { data, timestamp: Date.now() });
+}
 
 // Rate limiter — serializes through a promise chain so that concurrent callers
 // each reserve a distinct time slot instead of all reading the same timestamp
 // and firing simultaneously (TOCTOU race).
 let rateLimitChain: Promise<void> = Promise.resolve();
 
-function rateLimit(): Promise<void> {
+export function rateLimit(): Promise<void> {
   const minInterval = 1000 / RATE_LIMIT_PER_SEC;
   const result = rateLimitChain.then(async () => {
     const wait = lastScheduledTime + minInterval - Date.now();
@@ -41,8 +52,11 @@ export async function scrapeNextData<T>(urlPath: string): Promise<T | null> {
   // form don't produce two entries for the same resource.
   const cacheKey = url;
   const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    return cached.data as T;
+  if (cached) {
+    if (Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      return cached.data as T;
+    }
+    cache.delete(cacheKey);
   }
 
   await rateLimit();
@@ -65,8 +79,7 @@ export async function scrapeNextData<T>(urlPath: string): Promise<T | null> {
   const data = extractNextData<T>(html);
 
   if (data) {
-    // Cache the result
-    cache.set(cacheKey, { data, timestamp: Date.now() });
+    cacheSet(cacheKey, data);
   }
 
   return data;

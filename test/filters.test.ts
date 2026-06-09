@@ -1,5 +1,5 @@
 // Verifies the filter fixes from the code review actually work end-to-end.
-import { searchRealEstate, searchCars, searchMarketplace } from "../src/api/search.js";
+import { searchListings, searchRealEstate, searchCars, searchMarketplace } from "../src/api/search.js";
 import { resolveLocationToAreaId } from "../src/api/geo.js";
 
 function assert(label: string, cond: boolean, detail: string) {
@@ -30,6 +30,11 @@ async function main() {
   const rePlz = await searchRealEstate({ rows: 2, location: "6020" });
   assert("RE location=6020 (dynamic PLZ)", rePlz.total < reAll.total, `${rePlz.total}`);
 
+  // Universal search must respect a real-estate category (was silently dropped).
+  const uniHaus = await searchListings({ vertical: "real_estate", category: "haus-kaufen/haus-angebote", rows: 2 });
+  assert("universal RE category=haus", uniHaus.total > 0 && uniHaus.total !== reAll.total,
+    `default=${reAll.total} haus=${uniHaus.total}`);
+
   const carsAll = await searchCars({ rows: 2 });
 
   const carsBmw = await searchCars({ rows: 2, make: "BMW", price_from: 5000, price_to: 15000 });
@@ -40,6 +45,12 @@ async function main() {
 
   const carsWien = await searchCars({ rows: 2, location: "Wien" });
   assert("Cars location=Wien", carsWien.total < carsAll.total && carsWien.total > 0, `${carsWien.total}`);
+
+  // Category slug must actually narrow (a bare numeric ID silently doesn't).
+  const mpUnfiltered = await searchMarketplace({ rows: 2 });
+  const mpComputer = await searchMarketplace({ rows: 2, category: "computer-software-5824" });
+  assert("MP category=computer-software", mpComputer.total > 0 && mpComputer.total < mpUnfiltered.total / 10,
+    `all=${mpUnfiltered.total} computer=${mpComputer.total}`);
 
   const mpAll = await searchMarketplace({ keyword: "iphone", rows: 2 });
   const mpNew = await searchMarketplace({ keyword: "iphone", rows: 2, condition: "neu" });

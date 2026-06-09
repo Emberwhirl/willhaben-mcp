@@ -13,6 +13,7 @@
 //    { name: "Ort",      entries: [...] }]
 
 import { WILLHABEN_BASE_URL, DEFAULT_USER_AGENT, resolveAreaId } from "../utils/constants.js";
+import { rateLimit } from "./scraper.js";
 
 interface AreaEntry {
   areaId: number;
@@ -32,6 +33,7 @@ const areaCache = new Map<string, string | null>();
  * Query the willhaben area autocomplete and return its raw grouped results.
  */
 export async function lookupAreaSuggestions(term: string): Promise<AreaGroup[]> {
+  await rateLimit();
   const url = `${WILLHABEN_BASE_URL}/webapi/autocomplete/area?term=${encodeURIComponent(term)}&source=desktop`;
   const response = await fetch(url, {
     headers: {

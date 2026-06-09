@@ -19,6 +19,7 @@ npm run dev                        # tsx src/index.ts
 npx tsc --noEmit --noUnusedLocals --noUnusedParameters   # strict type check
 npx tsx test/integration.test.ts   # smoke test per vertical (hits live willhaben)
 npx tsx test/filters.test.ts       # asserts every filter actually narrows results
+npx tsx test/categories.test.ts    # asserts every category in constants.ts resolves live
 ```
 
 After editing `src/`, run the build and at least `filters.test.ts` before claiming done.
@@ -61,6 +62,11 @@ Tests hit the live site, so failures can be network/markup drift — check befor
     `MILEAGE_FROM/TO`, `ENGINE/FUEL`, `TRANSMISSION`, `MOTOR_CONDITION`
   - Location: `areaId` (real estate, cars, marketplace — **not** jobs)
   - Marketplace condition: `treeAttributes` (neu=22, gebraucht=23, defekt=24)
+- **Marketplace category paths need the full slug** (`computer-software-5824`), not the bare numeric
+  ID — `/marktplatz/5824` returns 200 with `is404:false` but silently ignores the filter (whole-market
+  rowsFound). Verified slugs live in `MARKETPLACE_CATEGORIES`; the marketplace landing page's nav links
+  are the source of truth if they drift. (Old `computer_tablets: 5828` was stale; live top-level is
+  `computer-software-5824`.)
 - **Car make/model** are folded into the free-text `keyword` unless the value is numeric (then used
   as `CAR_MODEL/MAKE`/`MODEL`). Brand-name → ID mapping is intentionally not maintained.
 - **Jobs ignore location.** `areaId`/`AREA` do nothing on the jobs API — keyword only.

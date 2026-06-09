@@ -1,6 +1,7 @@
 // Willhaben Search API - Search listings via page scraping
 import {
   WillhabenAdSummary,
+  WillhabenAttribute,
   SimplifiedListing,
   SearchInput,
   RealEstateSearchInput,
@@ -20,15 +21,21 @@ import {
 } from "../utils/constants.js";
 
 /**
+ * Flatten willhaben's attribute list into a name → value(s) map.
+ */
+export function attributesToMap(attributes: WillhabenAttribute[] | undefined): Record<string, string | string[]> {
+  const attrs: Record<string, string | string[]> = {};
+  for (const attr of attributes ?? []) {
+    attrs[attr.name] = attr.values.length === 1 ? attr.values[0] : attr.values;
+  }
+  return attrs;
+}
+
+/**
  * Simplify an ad summary into a clean, readable format
  */
 export function simplifyAdSummary(ad: WillhabenAdSummary): SimplifiedListing {
-  const attrs: Record<string, string | string[]> = {};
-  if (ad.attributes?.attribute) {
-    for (const attr of ad.attributes.attribute) {
-      attrs[attr.name] = attr.values.length === 1 ? attr.values[0] : attr.values;
-    }
-  }
+  const attrs = attributesToMap(ad.attributes?.attribute);
 
   const seoUrl = attrs.SEO_URL as string | undefined;
   const url = seoUrl
@@ -122,8 +129,9 @@ export async function searchListings(input: SearchInput) {
     if (areaId) params.areaId = areaId;
   }
 
-  // Category for marketplace
-  if (category && verticalId === VerticalId.MARKTPLATZ) {
+  // Category becomes part of the URL path (marketplace slug or real-estate
+  // category path like "haus-kaufen/haus-angebote").
+  if (category && (verticalId === VerticalId.MARKTPLATZ || verticalId === VerticalId.IMMOBILIEN)) {
     params.category = category;
   }
 

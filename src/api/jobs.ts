@@ -1,17 +1,14 @@
 // Willhaben Jobs API - Uses publicapi.willhaben.at (no scraping needed)
-import { WillhabenJobsSearchResult, WillhabenJobAd, SimplifiedListing } from "./types.js";
+import { WillhabenJobsSearchResult, WillhabenJobAd, SimplifiedListing, VerticalId } from "./types.js";
 import { fetchPublicApi, scrapeSearchResults } from "./scraper.js";
+import { attributesToMap, simplifyAdSummary } from "./search.js";
+import { SORT_CODES } from "../utils/constants.js";
 
 /**
  * Simplify a job ad into a clean, readable format
  */
 function simplifyJobAd(ad: WillhabenJobAd): SimplifiedListing {
-  const attrs: Record<string, string | string[]> = {};
-  if (ad.attributes) {
-    for (const attr of ad.attributes) {
-      attrs[attr.name] = attr.values.length === 1 ? attr.values[0] : attr.values;
-    }
-  }
+  const attrs = attributesToMap(ad.attributes);
 
   const url = `https://www.willhaben.at/iad/job/${ad.id}`;
   const title = ad.description ?? "";
@@ -87,18 +84,20 @@ export async function searchJobs(input: {
     };
   } catch (error) {
     // Fallback: try scraping the jobs page
-    return searchJobsViaScraping(keyword, rows, page);
+    return searchJobsViaScraping(keyword, rows, page, sort);
   }
 }
 
 /**
  * Fallback: Search jobs via page scraping
  */
-async function searchJobsViaScraping(keyword?: string, rows: number = 30, page: number = 1) {
+async function searchJobsViaScraping(keyword?: string, rows: number = 30, page: number = 1, sort?: string) {
   const params = new URLSearchParams();
   params.set("rows", String(rows));
   params.set("page", String(page));
   if (keyword) params.set("keyword", keyword);
+  const sortCode = sort ? SORT_CODES[VerticalId.JOBS]?.[sort] : undefined;
+  if (sortCode) params.set("sort", sortCode);
 
   const urlPath = `/iad/stellenmarkt?${params.toString()}`;
   const { result } = await scrapeSearchResults(urlPath);
@@ -107,38 +106,7 @@ async function searchJobsViaScraping(keyword?: string, rows: number = 30, page: 
     return { total: 0, page, rows_per_page: rows, listings: [], vertical: "jobs" };
   }
 
-  const listings = (result.advertSummaryList?.advertSummary ?? []).map((ad) => {
-    const attrs: Record<string, string | string[]> = {};
-    if (ad.attributes?.attribute) {
-      for (const attr of ad.attributes.attribute) {
-        attrs[attr.name] = attr.values.length === 1 ? attr.values[0] : attr.values;
-      }
-    }
-
-    const seoUrl = attrs.SEO_URL as string | undefined;
-    const url = seoUrl ? `https://www.willhaben.at/iad/${seoUrl}` : `https://www.willhaben.at/iad/object?adId=${ad.id}`;
-    const mainImage = ad.advertImageList?.advertImage?.[0];
-    const imageUrl = mainImage?.mainImageUrl ?? mainImage?.referenceImageUrl ?? null;
-    const heading = attrs.HEADING as string | undefined;
-    const location = (attrs.LOCATION as string) ?? null;
-    const orgName = attrs.ORGNAME as string | undefined;
-    const published = attrs.PUBLISHED_String as string | undefined;
-
-    return {
-      id: ad.id,
-      title: heading ?? ad.description ?? "",
-      price: null,
-      price_number: null,
-      location,
-      url,
-      image_url: imageUrl,
-      published,
-      attributes: attrs,
-      vertical: "Jobs",
-      is_private: attrs.ISPRIVATE === "1",
-      advertiser_name: orgName ?? null,
-    } as SimplifiedListing;
-  });
+  const listings = (result.advertSummaryList?.advertSummary ?? []).map(simplifyAdSummary);
 
   return {
     total: result.rowsFound,
@@ -146,6 +114,6 @@ async function searchJobsViaScraping(keyword?: string, rows: number = 30, page: 
     rows_per_page: result.rowsRequested,
     listings,
     vertical: "jobs",
-    description: result.description,
+    description: result.searchTitle,
   };
 }

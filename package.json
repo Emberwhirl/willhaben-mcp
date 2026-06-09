@@ -1,6 +1,6 @@
 {
   "name": "willhaben-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MCP server for willhaben.at - Austria's largest classifieds marketplace",
   "main": "dist/index.js",
   "type": "module",
@@ -10,7 +10,11 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "check": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
+    "test": "tsx test/integration.test.ts && tsx test/filters.test.ts",
+    "test:filters": "tsx test/filters.test.ts",
+    "test:categories": "tsx test/categories.test.ts"
   },
   "keywords": ["mcp", "willhaben", "austria", "classifieds", "real-estate", "cars", "jobs"],
   "author": "Ali Ildan",

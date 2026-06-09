@@ -10,7 +10,7 @@ import { formatSearchResults, formatDetail, formatCategories } from "./utils/for
 
 const server = new McpServer({
   name: "willhaben",
-  version: "1.0.0",
+  version: "1.0.2",
   description: "Search willhaben.at - Austria's largest classifieds marketplace. Search real estate, cars, jobs, and marketplace listings.",
 });
 
@@ -270,7 +270,7 @@ server.tool(
   "Search willhaben.at marketplace (Marktplatz) for second-hand items. Filter by keyword, category, condition, price, and location.",
   {
     keyword: z.string().optional().describe("Search term/keyword"),
-    category: z.string().optional().describe("Category slug (e.g., 'computer-tablets-5828', 'smartphones-handys-2722')"),
+    category: z.string().optional().describe("Category slug including the numeric ID (e.g., 'computer-software-5824', 'smartphones-telefonie-2691'). Use willhaben_get_categories to list valid slugs."),
     condition: z.string().optional().describe("Item condition: 'neu'/'new', 'gebraucht'/'used', or 'defekt'/'defective'"),
     location: z.string().optional().describe("Location: Austrian state, city, place, or postal code (e.g. 'Wien', 'Graz', '6020')"),
     price_from: z.number().optional().describe("Minimum price"),
@@ -333,13 +333,8 @@ server.tool(
       }
 
       if (params.vertical === "marketplace") {
-        // Show top-level marketplace categories
-        const topCategories: Record<string, { path: string; name: string }> = {};
-        for (const [key, id] of Object.entries(MARKETPLACE_CATEGORIES)) {
-          topCategories[key] = { path: String(id), name: key.replace(/_/g, " & ").replace(/^./, (s) => s.toUpperCase()) };
-        }
         return {
-          content: [{ type: "text" as const, text: formatCategories("Marketplace", topCategories) }],
+          content: [{ type: "text" as const, text: formatCategories("Marketplace", MARKETPLACE_CATEGORIES) }],
         };
       }
 

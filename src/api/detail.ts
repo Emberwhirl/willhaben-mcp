@@ -1,6 +1,7 @@
 // Willhaben Ad Detail API - Get full listing details
 import { WillhabenAdDetail, SimplifiedListingDetail } from "./types.js";
 import { scrapeAdDetail } from "./scraper.js";
+import { attributesToMap } from "./search.js";
 import { VERTICAL_NAMES } from "../utils/constants.js";
 
 /**
@@ -35,12 +36,7 @@ export async function getListingDetailBySeoUrl(seoUrl: string): Promise<Simplifi
  * Simplify an ad detail into a clean, readable format
  */
 function simplifyAdDetail(ad: WillhabenAdDetail): SimplifiedListingDetail {
-  const attrs: Record<string, string | string[]> = {};
-  if (ad.attributes?.attribute) {
-    for (const attr of ad.attributes.attribute) {
-      attrs[attr.name] = attr.values.length === 1 ? attr.values[0] : attr.values;
-    }
-  }
+  const attrs = attributesToMap(ad.attributes?.attribute);
 
   const images = ad.advertImageList?.advertImage?.map((img) => img.referenceImageUrl ?? img.mainImageUrl) ?? [];
 

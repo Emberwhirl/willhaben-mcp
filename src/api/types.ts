@@ -56,11 +56,6 @@ export interface WillhabenSearchResult {
   brazeBanners: unknown;
 }
 
-// Initial search result (used on auto/landing pages)
-export interface WillhabenInitialSearchResult extends Omit<WillhabenSearchResult, 'advertSummaryList'> {
-  advertSummaryList: WillhabenAdSummary[];
-}
-
 export interface WillhabenAdSummary {
   id: string;
   verticalId: number;
@@ -392,32 +387,6 @@ export interface CarSearchInput {
   sort?: string;
   rows?: number;
   page?: number;
-}
-
-export interface JobSearchInput {
-  keyword?: string;
-  location?: string;
-  job_type?: string;
-  sort?: string;
-  rows?: number;
-  page?: number;
-}
-
-export interface ListingDetailInput {
-  id: string;
-}
-
-export interface SellerProfileInput {
-  seller_id: string;
-}
-
-export interface SimilarListingsInput {
-  id: string;
-  vertical: VerticalIdType;
-}
-
-export interface CategoriesInput {
-  vertical: "marketplace" | "real_estate" | "cars" | "jobs";
 }
 
 // Simplified output types for MCP responses
