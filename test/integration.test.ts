@@ -57,9 +57,14 @@ async function main() {
   }
 
   // Test 5: Real Estate search
+  // Also captures a currently-live ad id for the detail test below: hard-coding
+  // one makes this suite go red as soon as that ad expires (willhaben serves
+  // expired ads as HTTP 200 with no `advertDetails` in __NEXT_DATA__).
+  let liveAdId: string | null = null;
   console.log("\n--- Testing: Real Estate search ---");
   try {
     const reResult = await searchRealEstate({ rows: 3 });
+    liveAdId = reResult.listings[0]?.id ?? null;
     console.log(`✅ Found ${reResult.total} listings (${reResult.listings.length} returned)`);
     for (const listing of reResult.listings.slice(0, 3)) {
       console.log(`   - ${listing.title} | Price: ${listing.price ?? "N/A"} | Location: ${listing.location ?? "N/A"}`);
@@ -80,21 +85,26 @@ async function main() {
     console.log(`❌ Car search Error: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  // Test 7: Detail page
+  // Test 7: Detail page (uses an ad id observed live in Test 5)
   console.log("\n--- Testing: Listing detail ---");
-  try {
-    const detail = await getListingDetail("1370327604");
-    if (detail) {
-      console.log(`✅ Got detail for listing ${detail.id}`);
-      console.log(`   Title: ${detail.title}`);
-      console.log(`   Price: ${detail.price}`);
-      console.log(`   Images: ${detail.images.length}`);
-      console.log(`   Vertical: ${detail.vertical}`);
-    } else {
-      console.log("❌ No detail found");
+  if (!liveAdId) {
+    console.log("⏭️  Skipped - the real estate search returned no ad id to look up");
+  } else {
+    try {
+      console.log(`Ad ID: ${liveAdId} (taken from the live search above)`);
+      const detail = await getListingDetail(liveAdId);
+      if (detail) {
+        console.log(`✅ Got detail for listing ${detail.id}`);
+        console.log(`   Title: ${detail.title}`);
+        console.log(`   Price: ${detail.price}`);
+        console.log(`   Images: ${detail.images.length}`);
+        console.log(`   Vertical: ${detail.vertical}`);
+      } else {
+        console.log("❌ No detail found");
+      }
+    } catch (error) {
+      console.log(`❌ Detail Error: ${error instanceof Error ? error.message : String(error)}`);
     }
-  } catch (error) {
-    console.log(`❌ Detail Error: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   console.log("\n=====================================");

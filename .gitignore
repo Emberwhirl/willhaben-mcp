@@ -30,3 +30,5 @@ coverage/
 
 # OS
 Thumbs.db
+# Generated MCP App bundle
+src/generated/

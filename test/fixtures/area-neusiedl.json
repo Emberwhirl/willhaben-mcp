@@ -1,0 +1,13 @@
+[
+  {
+    "name": "Gemeinde",
+    "entries": [
+      { "areaId": 30733, "label": "Neusiedl am See", "provinceAreaId": 1 },
+      { "areaId": 31234, "label": "Neusiedl an der Zaya", "provinceAreaId": 3 }
+    ]
+  },
+  {
+    "name": "Ort",
+    "entries": [{ "areaId": 40567, "label": "Neusiedl bei Güssing", "provinceAreaId": 1 }]
+  }
+]

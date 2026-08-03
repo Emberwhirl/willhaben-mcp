@@ -1,7 +1,7 @@
 // Willhaben Jobs API - Uses publicapi.willhaben.at (no scraping needed)
 import { WillhabenJobsSearchResult, WillhabenJobAd, SimplifiedListing, VerticalId } from "./types.js";
 import { fetchPublicApi, scrapeSearchResults } from "./scraper.js";
-import { attributesToMap, simplifyAdSummary } from "./search.js";
+import { attributesToMap, simplifyAdSummary, stripRedundantAttributes } from "./search.js";
 import { SORT_CODES } from "../utils/constants.js";
 
 /**
@@ -26,7 +26,7 @@ function simplifyJobAd(ad: WillhabenJobAd): SimplifiedListing {
     url,
     image_url: imageUrl,
     published,
-    attributes: attrs,
+    attributes: stripRedundantAttributes(attrs),
     vertical: "Jobs",
     is_private: false,
     advertiser_name: orgName,

@@ -1,0 +1,6 @@
+[
+  { "match": "autocomplete/area?term=Graz", "file": "area-graz.json" },
+  { "match": "autocomplete/area?term=Neusiedl", "file": "area-neusiedl.json" },
+  { "match": "/iad/object?adId=", "file": "detail.html" },
+  { "match": "/iad/immobilien/", "file": "search-real-estate.html" }
+]

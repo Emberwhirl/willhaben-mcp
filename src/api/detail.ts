@@ -1,7 +1,7 @@
 // Willhaben Ad Detail API - Get full listing details
 import { WillhabenAdDetail, SimplifiedListingDetail } from "./types.js";
 import { scrapeAdDetail } from "./scraper.js";
-import { attributesToMap } from "./search.js";
+import { attributesToMap, stripRedundantAttributes } from "./search.js";
 import { VERTICAL_NAMES } from "../utils/constants.js";
 
 /**
@@ -38,7 +38,9 @@ export async function getListingDetailBySeoUrl(seoUrl: string): Promise<Simplifi
 function simplifyAdDetail(ad: WillhabenAdDetail): SimplifiedListingDetail {
   const attrs = attributesToMap(ad.attributes?.attribute);
 
-  const images = ad.advertImageList?.advertImage?.map((img) => img.referenceImageUrl ?? img.mainImageUrl) ?? [];
+  const images = (ad.advertImageList?.advertImage ?? [])
+    .map((img) => img.referenceImageUrl ?? img.mainImageUrl)
+    .filter((u): u is string => typeof u === "string" && u.length > 0);
 
   const seoUrl = attrs.SEO_URL as string | undefined;
   const url = seoUrl
@@ -52,16 +54,18 @@ function simplifyAdDetail(ad: WillhabenAdDetail): SimplifiedListingDetail {
   const bodyDyn = attrs.BODY_DYN as string | undefined;
   const description = bodyDyn ?? ad.description ?? "";
 
+  const parsedPrice = priceNumber ? parseFloat(priceNumber) : NaN;
+
   return {
     id: ad.id,
     title: heading ?? description.substring(0, 100),
     description,
     price: priceForDisplay ?? null,
-    price_number: priceNumber ? parseFloat(priceNumber) : null,
+    price_number: Number.isFinite(parsedPrice) ? parsedPrice : null,
     location: location ?? null,
     url,
     images,
-    attributes: attrs,
+    attributes: stripRedundantAttributes(attrs),
     vertical: VERTICAL_NAMES[ad.verticalId] ?? String(ad.verticalId),
     is_private: attrs.ISPRIVATE === "1",
     advertiser: {
@@ -76,7 +80,11 @@ function simplifyAdDetail(ad: WillhabenAdDetail): SimplifiedListingDetail {
       postcode: ad.advertAddressDetails?.postCode ?? null,
       city: ad.advertAddressDetails?.postalName ?? ad.advertAddressDetails?.municipality ?? null,
       country: ad.advertAddressDetails?.country ?? null,
-      coordinates: (attrs.COORDINATES as string) ?? null,
+      coordinates: attrs.COORDINATES
+        ? Array.isArray(attrs.COORDINATES)
+          ? attrs.COORDINATES.join(",")
+          : attrs.COORDINATES
+        : null,
     },
     contact_type: ad.contactOption?.contactType ?? null,
     chat_enabled: ad.chatEnabled ?? false,

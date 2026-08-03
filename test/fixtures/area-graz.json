@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Gemeinde",
+    "entries": [{ "areaId": 60101, "label": "Graz", "provinceAreaId": 6 }]
+  },
+  {
+    "name": "Ort",
+    "entries": [{ "areaId": 60999, "label": "Grazerfeld", "provinceAreaId": 6 }]
+  }
+]

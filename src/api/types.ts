@@ -350,6 +350,8 @@ export interface SearchInput {
   keyword?: string;
   category?: string;
   location?: string;
+  /** Pre-resolved willhaben areaId; when set, `location` is not resolved again. */
+  area_id?: string;
   price_from?: number;
   price_to?: number;
   sort?: string;
@@ -361,6 +363,8 @@ export interface RealEstateSearchInput {
   property_type?: string;
   action?: "buy" | "rent";
   location?: string;
+  /** Pre-resolved willhaben areaId; when set, `location` is not resolved again. */
+  area_id?: string;
   price_from?: number;
   price_to?: number;
   rooms?: number;
@@ -375,6 +379,8 @@ export interface CarSearchInput {
   make?: string;
   model?: string;
   location?: string;
+  /** Pre-resolved willhaben areaId; when set, `location` is not resolved again. */
+  area_id?: string;
   price_from?: number;
   price_to?: number;
   year_from?: number;

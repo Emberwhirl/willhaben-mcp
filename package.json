@@ -1,6 +1,6 @@
 {
   "name": "willhaben-mcp",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "MCP server for willhaben.at - Austria's largest classifieds marketplace",
   "main": "dist/index.js",
   "type": "module",
@@ -8,30 +8,36 @@
     "willhaben-mcp": "dist/index.js"
   },
   "scripts": {
-    "build": "tsup",
-    "dev": "tsx src/index.ts",
+    "build": "node scripts/build-ui.mjs && tsup",
+    "build:ui": "node scripts/build-ui.mjs",
+    "dev": "node scripts/build-ui.mjs && tsx src/index.ts",
     "start": "node dist/index.js",
-    "check": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
+    "check": "node scripts/build-ui.mjs && tsc --noEmit --noUnusedLocals --noUnusedParameters",
     "test": "tsx test/integration.test.ts && tsx test/filters.test.ts",
+    "test:protocol": "tsx test/protocol.test.ts && tsx test/legacy-compat.test.ts",
     "test:filters": "tsx test/filters.test.ts",
     "test:categories": "tsx test/categories.test.ts"
   },
-  "keywords": ["mcp", "willhaben", "austria", "classifieds", "real-estate", "cars", "jobs"],
+  "keywords": ["mcp", "willhaben", "austria", "classifieds", "real-estate", "cars", "jobs", "mcp-apps"],
   "author": "Ali Ildan",
   "license": "MIT",
   "files": ["dist", "README.md", "LICENSE", "DISCLAIMER.md"],
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/server": "^2.0.0",
     "cheerio": "^1.0.0",
-    "zod": "^3.25.0 || ^4.0.0"
+    "zod": "^4.2.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
     "tsup": "^8.4.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.7.0"
   }
 }

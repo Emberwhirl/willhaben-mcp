@@ -1,6 +1,7 @@
 // Willhaben HTML Scraper - Extracts __NEXT_DATA__ JSON from willhaben.at pages
 import * as cheerio from "cheerio";
-import { WILLHABEN_BASE_URL, WILLHABEN_PUBLIC_API, DEFAULT_USER_AGENT, CACHE_TTL_MS, RATE_LIMIT_PER_SEC } from "../utils/constants.js";
+import { WILLHABEN_BASE_URL, WILLHABEN_PUBLIC_API, CACHE_TTL_MS, RATE_LIMIT_PER_SEC } from "../utils/constants.js";
+import { httpText, httpJson } from "./httpClient.js";
 
 interface CacheEntry {
   data: unknown;
@@ -61,22 +62,13 @@ export async function scrapeNextData<T>(urlPath: string): Promise<T | null> {
 
   await rateLimit();
 
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": DEFAULT_USER_AGENT,
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "de-AT,de;q=0.9,en;q=0.8",
-      "Accept-Encoding": "gzip, deflate, br",
-      "Connection": "keep-alive",
-    },
-  });
+  const response = await httpText(url, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
 
   if (!response.ok) {
     throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
   }
 
-  const html = await response.text();
-  const data = extractNextData<T>(html);
+  const data = extractNextData<T>(response.body);
 
   if (data) {
     cacheSet(cacheKey, data);
@@ -191,16 +183,11 @@ export async function fetchPublicApi<T>(urlPath: string): Promise<T> {
 
   const url = urlPath.startsWith("http") ? urlPath : `${WILLHABEN_PUBLIC_API}${urlPath}`;
 
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": DEFAULT_USER_AGENT,
-      "Accept": "application/json",
-    },
-  });
+  const response = await httpJson<T>(url);
 
   if (!response.ok) {
     throw new Error(`Public API error: ${response.status} ${response.statusText}`);
   }
 
-  return response.json() as Promise<T>;
+  return response.json();
 }

@@ -1,7 +1,7 @@
 ---
 description: Search willhaben.at from a natural-language query and return a clean comparison table
 argument-hint: e.g. "2-room apartment in Graz under 300k" | "used BMW diesel automatic under 15k" | "iPhone 15 in Wien"
-allowed-tools: mcp__willhaben__willhaben_search, mcp__willhaben__willhaben_search_real_estate, mcp__willhaben__willhaben_search_cars, mcp__willhaben__willhaben_search_jobs, mcp__willhaben__willhaben_search_marketplace, mcp__willhaben__willhaben_get_listing, mcp__willhaben__willhaben_get_categories
+allowed-tools: mcp__willhaben__willhaben_search, mcp__willhaben__willhaben_search_real_estate, mcp__willhaben__willhaben_search_cars, mcp__willhaben__willhaben_search_jobs, mcp__willhaben__willhaben_search_marketplace, mcp__willhaben__willhaben_deep_search, mcp__willhaben__willhaben_get_listing, mcp__willhaben__willhaben_get_categories
 ---
 
 You are a willhaben.at search assistant. Turn the user's request into the right

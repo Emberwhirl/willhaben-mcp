@@ -10,8 +10,9 @@ Protocol clients — with natural-language search, structured filters, and full
 listing details.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Node ≥ 18](https://img.shields.io/badge/node-%E2%89%A518-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org)
-[![MCP](https://img.shields.io/badge/Model_Context_Protocol-server-7C3AED.svg)](https://modelcontextprotocol.io)
+[![Node ≥ 20](https://img.shields.io/badge/node-%E2%89%A520-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org)
+[![MCP 2026-07-28](https://img.shields.io/badge/MCP-2026--07--28-7C3AED.svg)](https://modelcontextprotocol.io/specification/2026-07-28)
+[![MCP Apps](https://img.shields.io/badge/MCP_Apps-interactive_UI-0A6CFF.svg)](https://modelcontextprotocol.io/extensions/apps/overview)
 [![Status: unofficial](https://img.shields.io/badge/status-unofficial-orange.svg)](#legal--responsible-use)
 
 </div>
@@ -31,21 +32,34 @@ listing details.
 
 ## Contents
 
-- [What you can do](#what-you-can-do)
-- [Coverage](#coverage)
-- [Requirements](#requirements)
-- [Quickstart](#quickstart)
-- [Available tools](#available-tools)
-- [Sample output](#sample-output)
-- [Example prompts](#example-prompts)
-- [Bundled command & skill](#bundled-command--skill)
-- [Location filtering](#location-filtering)
-- [How it works](#how-it-works)
-- [Limitations & notes](#limitations--notes)
-- [Development](#development)
-- [Acknowledgements](#acknowledgements)
-- [Legal & responsible use](#legal--responsible-use)
-- [License](#license)
+- [willhaben-mcp](#willhaben-mcp)
+  - [Contents](#contents)
+  - [What you can do](#what-you-can-do)
+  - [Coverage](#coverage)
+  - [Requirements](#requirements)
+  - [Quickstart](#quickstart)
+    - [Register it with your MCP client](#register-it-with-your-mcp-client)
+  - [Available tools](#available-tools)
+    - [`willhaben_search`](#willhaben_search)
+    - [`willhaben_search_real_estate`](#willhaben_search_real_estate)
+    - [`willhaben_search_cars`](#willhaben_search_cars)
+    - [`willhaben_search_jobs`](#willhaben_search_jobs)
+    - [`willhaben_search_marketplace`](#willhaben_search_marketplace)
+    - [`willhaben_deep_search`](#willhaben_deep_search)
+    - [`willhaben_get_listing`](#willhaben_get_listing)
+    - [`willhaben_get_categories`](#willhaben_get_categories)
+      - [Sort values](#sort-values)
+  - [Sample output](#sample-output)
+  - [Built on MCP 2026-07-28](#built-on-mcp-2026-07-28)
+  - [Example prompts](#example-prompts)
+  - [Bundled command \& skill](#bundled-command--skill)
+  - [Location filtering](#location-filtering)
+  - [How it works](#how-it-works)
+  - [Limitations \& notes](#limitations--notes)
+  - [Development](#development)
+  - [Acknowledgements](#acknowledgements)
+  - [Legal \& Responsible Use](#legal--responsible-use)
+  - [License](#license)
 
 ## What you can do
 
@@ -55,7 +69,10 @@ listing details.
 - 💼 **Jobs** — listings by keyword and job type
 - 🛍️ **Marketplace** — second-hand items by keyword, category, condition, price, location
 - 📋 **Listing details** — full attributes, images, seller info, address, contact options
-- 📍 **Smart location** — Austrian states resolved offline, plus live city / place / postal-code lookup
+- 🕵️ **Deep search** — scan multiple pages, rank by value (€/m²), and pull details on the top matches in one call, with live progress
+- 🖼️ **Interactive results** — an [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview) card gallery with photos renders right in the chat on capable clients (Claude, Claude Desktop, VS Code, …)
+- 📊 **Structured output** — every tool returns typed `structuredContent` alongside readable text, so models can sort, filter, and compare reliably
+- 📍 **Smart location** — Austrian states resolved offline, live city / place / postal-code lookup — and when a place name is ambiguous, the server **asks you which one you meant**
 - ⚡ **Zero configuration** — no API keys, no tokens, no accounts
 - 🛡️ **Polite by design** — one-request-at-a-time rate limiting and response caching built in
 
@@ -72,8 +89,9 @@ listing details.
 
 ## Requirements
 
-- **Node.js ≥ 18** (uses the built-in global `fetch`)
-- Any MCP-compatible client (Claude Desktop, Claude Code, etc.)
+- **Node.js ≥ 20**
+- Any MCP-compatible client (Claude Desktop, Claude Code, etc.) — the server speaks the
+  **2026-07-28** MCP revision *and* the legacy protocol, so both new and old clients work
 
 ## Quickstart
 
@@ -131,8 +149,15 @@ under €400,000."* The server speaks MCP over stdio — no ports, keys, or acco
 | `willhaben_search_cars` | Used/new cars with vehicle filters |
 | `willhaben_search_jobs` | Job listings |
 | `willhaben_search_marketplace` | Second-hand marketplace items |
+| `willhaben_deep_search` | Scan up to 3 pages, dedupe + rank (€/m² / price), fetch details for the top matches — with progress reporting |
 | `willhaben_get_listing` | Full detail for a single listing by ID |
 | `willhaben_get_categories` | Available category paths per vertical |
+
+All tools are annotated read-only/idempotent, return **typed `structuredContent`** (validated
+against a published `outputSchema`) alongside the readable text, and the search/detail tools
+declare the interactive **results gallery app** (see below). The server also ships a
+`willhaben-search` **MCP prompt** that turns a natural-language request into the right tool call
+and a comparison table.
 
 <details>
 <summary><b>Parameter reference</b></summary>
@@ -163,6 +188,17 @@ Common to every search tool: `rows` (default 30, **capped at 100**) and `page` (
 
 ### `willhaben_search_marketplace`
 - `keyword`, `category`, `condition` (`neu`/`gebraucht`/`defekt`), `location`, `price_from`, `price_to`, `sort`
+
+### `willhaben_deep_search`
+- `vertical` *(required)* — `real_estate` · `cars` · `marketplace` (jobs not supported)
+- `keyword`, `category`, `location`, `price_from`, `price_to`, `sort`
+- `pages` — result pages to scan, 1–3 (default 2)
+- `detail_limit` — full details to fetch for the top-ranked listings, 0–8 (default 5)
+- `rank_by` — `price_per_m2` (default for real estate) · `price_asc` (default elsewhere) · `price_desc` · `none`
+
+Runs at the polite 1 req/s limit (≈1 s per page/detail) and reports progress while it works.
+Everything scanned feeds the ranking; the result carries the top 20 ranked listings
+(`scanned_listings` reports the full scan count) plus full details for the top `detail_limit`.
 
 ### `willhaben_get_listing`
 - `id` *(required)* — the listing/ad ID, e.g. `1370327604`
@@ -202,6 +238,39 @@ Vertical: real_estate
 
 `willhaben_get_listing` expands one ad into description highlights, full attribute list,
 image count, seller (private/dealer), address, and contact option.
+
+Every response also carries the same data as machine-readable `structuredContent`, and on
+MCP-Apps-capable clients search results render as an interactive photo-card gallery instead.
+
+## Built on MCP 2026-07-28
+
+The server implements the [2026-07-28 MCP revision](https://modelcontextprotocol.io/specification/2026-07-28)
+(with automatic fallback for legacy clients — old setups keep working unchanged):
+
+- **Stateless core** — every request is self-contained; the same factory serves modern
+  stateless clients and classic `initialize` clients.
+- **Structured tool output** — published `outputSchema` per tool; results arrive as validated
+  `structuredContent` plus readable text.
+- **Tool annotations** — everything is marked `readOnlyHint`/`idempotentHint`/`openWorldHint`,
+  so clients can relax approval friction appropriately.
+- **Ask-when-ambiguous locations (MRTR)** — an ambiguous `location` (say, *Neusiedl*) returns an
+  `input_required` elicitation listing the matching areas; you pick, the search continues. On
+  2025-era clients the SDK shim converts this into a classic elicitation request; clients without
+  elicitation support silently get the previous best-match behavior.
+- **[MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview)** — search and detail
+  tools declare `ui://willhaben/results.html`, a sandboxed card gallery (photos from willhaben's
+  CDN via a scoped CSP, price/€/m²/rooms chips, private/dealer badges, click-through to the
+  listing, *Load more* pagination that re-calls the tool from inside the app).
+- **Cache hints (SEP-2549)** — `tools/list`, `prompts/list`, `resources/list`, and the app
+  resource carry `ttlMs`/`cacheScope`, so clients stop re-fetching static metadata.
+- **Progress notifications** — `willhaben_deep_search` streams `notifications/progress` while it
+  scans pages and fetches details, and honors cancellation mid-run.
+- **MCP prompt** — `willhaben-search` packages the natural-language → comparison-table workflow
+  for every MCP client, not just Claude Code.
+
+> **Note on Tasks:** long-running work is kept deliberately bounded instead of using the new
+> `io.modelcontextprotocol/tasks` extension — the TypeScript server SDK does not ship a task
+> runtime yet. `willhaben_deep_search` is the natural candidate once it does.
 
 ## Example prompts
 
@@ -294,31 +363,42 @@ reverse-engineered credentials are involved.
 
 ```bash
 npm install          # install dependencies
-npm run build        # bundle to dist/ (tsup)
+npm run build        # build the MCP App UI + bundle to dist/ (esbuild + tsup)
 npm run dev          # run from source (tsx)
+npm run check        # strict type check
 
-npx tsx test/integration.test.ts   # smoke test across verticals
-npx tsx test/filters.test.ts       # verify every filter end-to-end
+npm run test:protocol              # OFFLINE protocol tests (2026-07-28 + legacy client), fixture-driven
+npx tsx test/integration.test.ts   # smoke test across verticals (live)
+npx tsx test/filters.test.ts       # verify every filter end-to-end (live)
 ```
+
+The protocol tests run **without touching willhaben**: setting `WILLHABEN_MCP_FIXTURES` reroutes
+all HTTP through recorded fixtures in `test/fixtures/`.
 
 ```text
 src/
-├── index.ts            # MCP server + tool definitions
+├── index.ts            # stdio entry (serveStdio; serves 2026-07-28 + legacy eras)
+├── server.ts           # createServer(): tools, prompt, app resource, cache hints, elicitation
+├── schemas.ts          # zod input/output schemas (source of truth for structuredContent)
 ├── api/
 │   ├── scraper.ts      # __NEXT_DATA__ extraction, rate limit, cache
+│   ├── httpClient.ts   # shared HTTP layer + offline fixture harness
 │   ├── search.ts       # search across real estate / cars / marketplace
+│   ├── deepsearch.ts   # bounded multi-page scan + rank + top-N details
 │   ├── jobs.ts         # jobs via publicapi.willhaben.at
 │   ├── detail.ts       # single-listing detail
-│   ├── geo.ts          # location → areaId resolution (static + live)
+│   ├── geo.ts          # location → areaId resolution (static + live + disambiguation)
 │   └── types.ts        # willhaben response & tool I/O types
-└── utils/
-    ├── constants.ts    # verticals, URL patterns, sort codes, area IDs
-    └── formatters.ts   # human-readable result formatting
+├── utils/
+│   ├── constants.ts    # verticals, URL patterns, sort codes, area IDs
+│   └── formatters.ts   # human-readable result formatting
+└── generated/          # appHtml.ts — built by scripts/build-ui.mjs (gitignored)
+ui/                     # the MCP App (card gallery) — bundled into a single HTML document
 ```
 
 ## Acknowledgements
 
-A heartfelt **thank-you to [willhaben](https://www.willhaben.at)** — Austria's #1
+A heartfelt **thank-you to [Willhaben](https://www.willhaben.at)** — Austria's #1
 marketplace and one of the country's most-loved digital products. Every day, millions of
 people across Austria rely on willhaben to buy and sell, find a home, land a job, and give
 things a second life. This project exists only because willhaben built something genuinely
@@ -358,5 +438,9 @@ willhaben.
 
 ## License
 
-[MIT](./LICENSE) © Ali Ildan. The MIT license covers this software only; it grants no
-rights to willhaben's content, data, trademarks, or services.
+[MIT](./LICENSE) © Copyright:
+
+- [Ali Ildan](https://github.com/aliildan)
+- [Emberwhirl](https://github.com/Emberwhirl)
+
+*The MIT license covers this software only; it grants no rights to Willhaben's content, data, trademarks, or services.*
