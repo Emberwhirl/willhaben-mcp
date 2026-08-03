@@ -647,13 +647,13 @@ export function createServer(): McpServer {
           content: [
             {
               type: "text",
-              text: `## Jobs Categories\n\nJobs on willhaben.at can be searched with keyword and location filters.\nUse "willhaben_search_jobs" with keyword and job_type parameters.\n\nJob types: Vollzeit, Teilzeit, etc.`,
+              text: `## Jobs Categories\n\nJobs on willhaben.at are searched by keyword only — the jobs API does not support location filtering. To narrow by place, include it in the keyword (e.g. "Software Wien").\nUse "willhaben_search_jobs" with keyword and job_type parameters.\n\nJob types: Vollzeit, Teilzeit, etc.`,
             },
           ],
           structuredContent: {
             vertical: "jobs",
             categories: [],
-            note: "Jobs have no category tree; search with keyword and job_type (Vollzeit, Teilzeit, ...).",
+            note: "Jobs have no category tree; search with keyword and job_type (Vollzeit, Teilzeit, ...). The jobs API ignores location — fold the place into the keyword instead.",
           },
         };
       } catch (error) {

@@ -11,7 +11,7 @@
 // The first entry whose `match` is contained in the URL wins.
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { DEFAULT_USER_AGENT } from "../utils/constants.js";
 
 interface FixtureRoute {
@@ -20,7 +20,7 @@ interface FixtureRoute {
   status?: number;
 }
 
-let fixtureRoutes: FixtureRoute[] | null | undefined;
+let fixtureRoutes: FixtureRoute[] | undefined;
 
 async function loadFixture(url: string): Promise<{ status: number; body: string } | null> {
   const dir = process.env.WILLHABEN_MCP_FIXTURES;
@@ -29,16 +29,26 @@ async function loadFixture(url: string): Promise<{ status: number; body: string 
   if (fixtureRoutes === undefined) {
     try {
       fixtureRoutes = JSON.parse(await readFile(join(dir, "routes.json"), "utf8")) as FixtureRoute[];
-    } catch {
-      fixtureRoutes = null;
+    } catch (error) {
+      // Fail loudly: silently falling back to the live network here would
+      // defeat the hermetic-test guarantee and hit willhaben from CI.
+      throw new Error(
+        `WILLHABEN_MCP_FIXTURES is set but ${join(dir, "routes.json")} could not be read or parsed: ` +
+          (error instanceof Error ? error.message : String(error))
+      );
     }
   }
-  if (!fixtureRoutes) return null;
 
   const route = fixtureRoutes.find((r) => url.includes(r.match));
   if (!route) return { status: 404, body: "fixture: no route matched " + url };
 
-  const body = await readFile(join(dir, route.file), "utf8");
+  // Fixture files must stay inside the fixtures directory (no ../ or absolute paths).
+  const filePath = resolve(dir, route.file);
+  if (!filePath.startsWith(resolve(dir) + sep)) {
+    throw new Error(`fixture route file escapes the fixtures directory: ${route.file}`);
+  }
+
+  const body = await readFile(filePath, "utf8");
   return { status: route.status ?? 200, body };
 }
 

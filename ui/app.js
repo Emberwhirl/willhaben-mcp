@@ -116,6 +116,10 @@ function renderHeader(payload) {
 function renderCard(listing, detailIds) {
   const card = el("article", "wh-card");
   card.tabIndex = 0;
+  // Accessible interactive control: announce as a link with a meaningful name.
+  card.setAttribute("role", "link");
+  const labelParts = [listing.title || "(untitled)", listing.price, listing.location].filter(Boolean);
+  card.setAttribute("aria-label", labelParts.join(", ") + " — opens the listing on willhaben.at");
 
   const imageWrap = el("div", "wh-card-image");
   if (listing.image_url) {
