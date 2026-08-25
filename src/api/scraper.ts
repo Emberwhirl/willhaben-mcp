@@ -1,7 +1,9 @@
 // Willhaben HTML Scraper - Extracts __NEXT_DATA__ JSON from willhaben.at pages
 import * as cheerio from "cheerio";
-import { WILLHABEN_BASE_URL, WILLHABEN_PUBLIC_API, CACHE_TTL_MS, RATE_LIMIT_PER_SEC } from "../utils/constants.js";
-import { httpText, httpJson } from "./httpClient.js";
+import { WILLHABEN_BASE_URL, WILLHABEN_PUBLIC_API, CACHE_TTL_MS } from "../utils/constants.js";
+import { httpText, httpJson, resolveWillhabenUrl } from "./httpClient.js";
+
+export { rateLimit, resetRateLimiterForTests } from "./httpClient.js";
 
 interface CacheEntry {
   data: unknown;
@@ -22,32 +24,11 @@ function cacheSet(key: string, data: unknown): void {
   cache.set(key, { data, timestamp: Date.now() });
 }
 
-// Rate limiter — serializes through a promise chain so that concurrent callers
-// each reserve a distinct time slot instead of all reading the same timestamp
-// and firing simultaneously (TOCTOU race).
-let rateLimitChain: Promise<void> = Promise.resolve();
-
-export function rateLimit(): Promise<void> {
-  const minInterval = 1000 / RATE_LIMIT_PER_SEC;
-  const result = rateLimitChain.then(async () => {
-    const wait = lastScheduledTime + minInterval - Date.now();
-    if (wait > 0) {
-      await new Promise((resolve) => setTimeout(resolve, wait));
-    }
-    lastScheduledTime = Date.now();
-  });
-  // Swallow errors on the chain itself so one failure doesn't poison the queue.
-  rateLimitChain = result.catch(() => {});
-  return result;
-}
-
-let lastScheduledTime = 0;
-
 /**
  * Fetch a willhaben.at page and extract __NEXT_DATA__ JSON
  */
 export async function scrapeNextData<T>(urlPath: string): Promise<T | null> {
-  const url = urlPath.startsWith("http") ? urlPath : `${WILLHABEN_BASE_URL}${urlPath}`;
+  const url = resolveWillhabenUrl(urlPath, WILLHABEN_BASE_URL);
 
   // Cache keyed on the fully-resolved URL so a relative path and its absolute
   // form don't produce two entries for the same resource.
@@ -59,8 +40,6 @@ export async function scrapeNextData<T>(urlPath: string): Promise<T | null> {
     }
     cache.delete(cacheKey);
   }
-
-  await rateLimit();
 
   const response = await httpText(url, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
 
@@ -179,9 +158,7 @@ export function clearCache(): void {
  * Make a direct fetch to publicapi.willhaben.at (no scraping needed)
  */
 export async function fetchPublicApi<T>(urlPath: string): Promise<T> {
-  await rateLimit();
-
-  const url = urlPath.startsWith("http") ? urlPath : `${WILLHABEN_PUBLIC_API}${urlPath}`;
+  const url = resolveWillhabenUrl(urlPath, WILLHABEN_PUBLIC_API);
 
   const response = await httpJson<T>(url);
 

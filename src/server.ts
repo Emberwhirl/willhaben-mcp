@@ -18,7 +18,9 @@ import {
   McpServer,
   inputRequired,
   inputResponse,
+  CLIENT_CAPABILITIES_META_KEY,
   type CallToolResult,
+  type ClientCapabilities,
   type InputRequiredResult,
   type ServerContext,
   type ToolAnnotations,
@@ -48,6 +50,7 @@ import {
   type SearchResultPayload,
 } from "./schemas.js";
 import { RESULTS_APP_HTML } from "./generated/appHtml.js";
+import { isAbortError, runWithAbortSignal } from "./api/httpClient.js";
 
 // Keep in sync with package.json and ui/app.js.
 export const SERVER_VERSION = "1.1.0";
@@ -98,8 +101,19 @@ function candidateLabel(candidate: AreaCandidate): string {
   return `${candidate.label} (${candidate.group})`;
 }
 
-function clientSupportsElicitation(server: McpServer): boolean {
+/**
+ * Elicitation is optional: missing or unreadable caps must never throw.
+ * Prefer this-request envelope caps (MCP 2026-07-28); fall back to the
+ * initialize-era accessor for legacy clients.
+ */
+function clientSupportsElicitation(server: McpServer, ctx: ServerContext): boolean {
   try {
+    const envelopeCaps = (
+      ctx.mcpReq.envelope as Record<string, ClientCapabilities | undefined> | undefined
+    )?.[CLIENT_CAPABILITIES_META_KEY];
+    if (envelopeCaps !== undefined) {
+      return envelopeCaps.elicitation !== undefined;
+    }
     return server.server.getClientCapabilities()?.elicitation !== undefined;
   } catch {
     return false;
@@ -148,7 +162,7 @@ async function resolveLocationInteractive(
     // Unexpected echo — fall through to the non-interactive fallback below.
   }
 
-  if (answer.kind === "missing" && clientSupportsElicitation(server)) {
+  if (answer.kind === "missing" && clientSupportsElicitation(server, ctx)) {
     return {
       status: "ask",
       result: inputRequired({
@@ -234,9 +248,25 @@ function searchToolResult(
 }
 
 function errorResult(prefix: string, error: unknown): CallToolResult {
+  // Cancellation must not be turned into a tool result — the client already
+  // dropped the request (MCP 2026-07-28 notifications/cancelled).
+  if (isAbortError(error)) throw error;
   return {
     content: [{ type: "text", text: `${prefix}: ${error instanceof Error ? error.message : String(error)}` }],
     isError: true,
+  };
+}
+
+function handleTool<P>(
+  errorPrefix: string,
+  fn: (params: P, ctx: ServerContext) => Promise<CallToolResult | InputRequiredResult>
+): (params: P, ctx: ServerContext) => Promise<CallToolResult | InputRequiredResult> {
+  return async (params, ctx) => {
+    try {
+      return await runWithAbortSignal(ctx.mcpReq.signal, () => fn(params, ctx));
+    } catch (error) {
+      return errorResult(errorPrefix, error);
+    }
   };
 }
 
@@ -281,41 +311,37 @@ export function createServer(): McpServer {
       annotations: READ_ONLY,
       _meta: UI_TOOL_META,
     },
-    async (params, ctx) => {
-      try {
-        let areaId: string | undefined;
-        let note: string | undefined;
+    handleTool("Error searching willhaben", async (params, ctx) => {
+      let areaId: string | undefined;
+      let note: string | undefined;
 
-        if (params.vertical === "jobs") {
-          if (params.location) {
-            note = "The jobs API does not support location filtering — include the place in `keyword` instead.";
-          }
-        } else {
-          const outcome = await resolveLocationInteractive(server, params.location, ctx);
-          if (outcome.status === "ask") return outcome.result;
-          if (outcome.status === "cancelled") return CANCELLED_RESULT;
-          areaId = outcome.areaId;
-          note = outcome.note;
+      if (params.vertical === "jobs") {
+        if (params.location) {
+          note = "The jobs API does not support location filtering — include the place in `keyword` instead.";
         }
-
-        const result = await searchListings({
-          vertical: params.vertical,
-          keyword: params.keyword,
-          category: params.category,
-          location: params.location,
-          area_id: areaId,
-          price_from: params.price_from,
-          price_to: params.price_to,
-          sort: params.sort,
-          rows: Math.min(params.rows ?? 30, 100),
-          page: params.page ?? 1,
-        });
-
-        return searchToolResult("willhaben_search", { ...params, area_id: areaId }, result, note);
-      } catch (error) {
-        return errorResult("Error searching willhaben", error);
+      } else {
+        const outcome = await resolveLocationInteractive(server, params.location, ctx);
+        if (outcome.status === "ask") return outcome.result;
+        if (outcome.status === "cancelled") return CANCELLED_RESULT;
+        areaId = outcome.areaId;
+        note = outcome.note;
       }
-    }
+
+      const result = await searchListings({
+        vertical: params.vertical,
+        keyword: params.keyword,
+        category: params.category,
+        location: params.location,
+        area_id: areaId,
+        price_from: params.price_from,
+        price_to: params.price_to,
+        sort: params.sort,
+        rows: Math.min(params.rows ?? 30, 100),
+        page: params.page ?? 1,
+      });
+
+      return searchToolResult("willhaben_search", { ...params, area_id: areaId }, result, note);
+    })
   );
 
   // -------------------------------------------------------------------------
@@ -332,32 +358,28 @@ export function createServer(): McpServer {
       annotations: READ_ONLY,
       _meta: UI_TOOL_META,
     },
-    async (params, ctx) => {
-      try {
-        const outcome = await resolveLocationInteractive(server, params.location, ctx);
-        if (outcome.status === "ask") return outcome.result;
-        if (outcome.status === "cancelled") return CANCELLED_RESULT;
+    handleTool("Error searching real estate", async (params, ctx) => {
+      const outcome = await resolveLocationInteractive(server, params.location, ctx);
+      if (outcome.status === "ask") return outcome.result;
+      if (outcome.status === "cancelled") return CANCELLED_RESULT;
 
-        const result = await searchRealEstate({
-          property_type: params.property_type,
-          action: params.action,
-          location: params.location,
-          area_id: outcome.areaId,
-          price_from: params.price_from,
-          price_to: params.price_to,
-          rooms: params.rooms,
-          area_from: params.area_from,
-          area_to: params.area_to,
-          sort: params.sort,
-          rows: Math.min(params.rows ?? 30, 100),
-          page: params.page ?? 1,
-        });
+      const result = await searchRealEstate({
+        property_type: params.property_type,
+        action: params.action,
+        location: params.location,
+        area_id: outcome.areaId,
+        price_from: params.price_from,
+        price_to: params.price_to,
+        rooms: params.rooms,
+        area_from: params.area_from,
+        area_to: params.area_to,
+        sort: params.sort,
+        rows: Math.min(params.rows ?? 30, 100),
+        page: params.page ?? 1,
+      });
 
-        return searchToolResult("willhaben_search_real_estate", { ...params, area_id: outcome.areaId }, result, outcome.note);
-      } catch (error) {
-        return errorResult("Error searching real estate", error);
-      }
-    }
+      return searchToolResult("willhaben_search_real_estate", { ...params, area_id: outcome.areaId }, result, outcome.note);
+    })
   );
 
   // -------------------------------------------------------------------------
@@ -374,36 +396,32 @@ export function createServer(): McpServer {
       annotations: READ_ONLY,
       _meta: UI_TOOL_META,
     },
-    async (params, ctx) => {
-      try {
-        const outcome = await resolveLocationInteractive(server, params.location, ctx);
-        if (outcome.status === "ask") return outcome.result;
-        if (outcome.status === "cancelled") return CANCELLED_RESULT;
+    handleTool("Error searching cars", async (params, ctx) => {
+      const outcome = await resolveLocationInteractive(server, params.location, ctx);
+      if (outcome.status === "ask") return outcome.result;
+      if (outcome.status === "cancelled") return CANCELLED_RESULT;
 
-        const result = await searchCars({
-          make: params.make,
-          model: params.model,
-          location: params.location,
-          area_id: outcome.areaId,
-          price_from: params.price_from,
-          price_to: params.price_to,
-          year_from: params.year_from,
-          year_to: params.year_to,
-          mileage_from: params.mileage_from,
-          mileage_to: params.mileage_to,
-          fuel_type: params.fuel_type,
-          transmission: params.transmission,
-          condition: params.condition,
-          sort: params.sort,
-          rows: Math.min(params.rows ?? 30, 100),
-          page: params.page ?? 1,
-        });
+      const result = await searchCars({
+        make: params.make,
+        model: params.model,
+        location: params.location,
+        area_id: outcome.areaId,
+        price_from: params.price_from,
+        price_to: params.price_to,
+        year_from: params.year_from,
+        year_to: params.year_to,
+        mileage_from: params.mileage_from,
+        mileage_to: params.mileage_to,
+        fuel_type: params.fuel_type,
+        transmission: params.transmission,
+        condition: params.condition,
+        sort: params.sort,
+        rows: Math.min(params.rows ?? 30, 100),
+        page: params.page ?? 1,
+      });
 
-        return searchToolResult("willhaben_search_cars", { ...params, area_id: outcome.areaId }, result, outcome.note);
-      } catch (error) {
-        return errorResult("Error searching cars", error);
-      }
-    }
+      return searchToolResult("willhaben_search_cars", { ...params, area_id: outcome.areaId }, result, outcome.note);
+    })
   );
 
   // -------------------------------------------------------------------------
@@ -419,21 +437,17 @@ export function createServer(): McpServer {
       annotations: READ_ONLY,
       _meta: UI_TOOL_META,
     },
-    async (params) => {
-      try {
-        const result = await searchJobs({
-          keyword: params.keyword,
-          job_type: params.job_type,
-          sort: params.sort,
-          rows: Math.min(params.rows ?? 30, 100),
-          page: params.page ?? 1,
-        });
+    handleTool("Error searching jobs", async (params) => {
+      const result = await searchJobs({
+        keyword: params.keyword,
+        job_type: params.job_type,
+        sort: params.sort,
+        rows: Math.min(params.rows ?? 30, 100),
+        page: params.page ?? 1,
+      });
 
-        return searchToolResult("willhaben_search_jobs", { ...params }, result);
-      } catch (error) {
-        return errorResult("Error searching jobs", error);
-      }
-    }
+      return searchToolResult("willhaben_search_jobs", { ...params }, result);
+    })
   );
 
   // -------------------------------------------------------------------------
@@ -450,30 +464,26 @@ export function createServer(): McpServer {
       annotations: READ_ONLY,
       _meta: UI_TOOL_META,
     },
-    async (params, ctx) => {
-      try {
-        const outcome = await resolveLocationInteractive(server, params.location, ctx);
-        if (outcome.status === "ask") return outcome.result;
-        if (outcome.status === "cancelled") return CANCELLED_RESULT;
+    handleTool("Error searching marketplace", async (params, ctx) => {
+      const outcome = await resolveLocationInteractive(server, params.location, ctx);
+      if (outcome.status === "ask") return outcome.result;
+      if (outcome.status === "cancelled") return CANCELLED_RESULT;
 
-        const result = await searchMarketplace({
-          keyword: params.keyword,
-          category: params.category,
-          condition: params.condition,
-          location: params.location,
-          area_id: outcome.areaId,
-          price_from: params.price_from,
-          price_to: params.price_to,
-          sort: params.sort,
-          rows: Math.min(params.rows ?? 30, 100),
-          page: params.page ?? 1,
-        });
+      const result = await searchMarketplace({
+        keyword: params.keyword,
+        category: params.category,
+        condition: params.condition,
+        location: params.location,
+        area_id: outcome.areaId,
+        price_from: params.price_from,
+        price_to: params.price_to,
+        sort: params.sort,
+        rows: Math.min(params.rows ?? 30, 100),
+        page: params.page ?? 1,
+      });
 
-        return searchToolResult("willhaben_search_marketplace", { ...params, area_id: outcome.areaId }, result, outcome.note);
-      } catch (error) {
-        return errorResult("Error searching marketplace", error);
-      }
-    }
+      return searchToolResult("willhaben_search_marketplace", { ...params, area_id: outcome.areaId }, result, outcome.note);
+    })
   );
 
   // -------------------------------------------------------------------------
@@ -491,74 +501,61 @@ export function createServer(): McpServer {
       annotations: READ_ONLY,
       _meta: UI_TOOL_META,
     },
-    async (params, ctx) => {
-      try {
-        const outcome = await resolveLocationInteractive(server, params.location, ctx);
-        if (outcome.status === "ask") return outcome.result;
-        if (outcome.status === "cancelled") return CANCELLED_RESULT;
+    handleTool("Error in deep search", async (params, ctx) => {
+      const outcome = await resolveLocationInteractive(server, params.location, ctx);
+      if (outcome.status === "ask") return outcome.result;
+      if (outcome.status === "cancelled") return CANCELLED_RESULT;
 
-        const progressToken = (ctx.mcpReq._meta as { progressToken?: string | number } | undefined)?.progressToken;
-        const onProgress =
-          progressToken !== undefined
-            ? async (progress: number, total: number, message: string) => {
-                try {
-                  await ctx.mcpReq.notify({
-                    method: "notifications/progress",
-                    params: { progressToken, progress, total, message },
-                  });
-                } catch {
-                  // Progress is best-effort; never fail the search over it.
-                }
+      const progressToken = (ctx.mcpReq._meta as { progressToken?: string | number } | undefined)?.progressToken;
+      const onProgress =
+        progressToken !== undefined
+          ? async (progress: number, total: number, message: string) => {
+              try {
+                await ctx.mcpReq.notify({
+                  method: "notifications/progress",
+                  params: { progressToken, progress, total, message },
+                });
+              } catch {
+                // Progress is best-effort; never fail the search over it.
               }
-            : undefined;
+            }
+          : undefined;
 
-        const result = await deepSearch(
-          {
-            vertical: params.vertical,
-            keyword: params.keyword,
-            category: params.category,
-            location: params.location,
-            area_id: outcome.areaId,
-            price_from: params.price_from,
-            price_to: params.price_to,
-            sort: params.sort,
-            pages: params.pages,
-            detail_limit: params.detail_limit,
-            rank_by: params.rank_by,
-          },
-          { signal: ctx.mcpReq.signal, onProgress }
-        );
+      const result = await deepSearch(
+        {
+          ...params,
+          area_id: outcome.areaId,
+        },
+        { signal: ctx.mcpReq.signal, onProgress }
+      );
 
-        const payload = {
-          query: { tool: "willhaben_deep_search", args: cleanArgs({ ...params, area_id: outcome.areaId }) },
-          total: result.total,
-          scanned_pages: result.scanned_pages,
-          scanned_listings: result.scanned_listings,
-          vertical: result.vertical,
-          ...(result.description !== undefined ? { description: result.description } : {}),
-          ...(outcome.note !== undefined ? { location_note: outcome.note } : {}),
-          ranked_by: result.ranked_by,
-          listings: result.listings,
-          details: result.details,
-        };
+      const payload = {
+        query: { tool: "willhaben_deep_search", args: cleanArgs({ ...params, area_id: outcome.areaId }) },
+        total: result.total,
+        scanned_pages: result.scanned_pages,
+        scanned_listings: result.scanned_listings,
+        vertical: result.vertical,
+        ...(result.description !== undefined ? { description: result.description } : {}),
+        ...(outcome.note !== undefined ? { location_note: outcome.note } : {}),
+        ranked_by: result.ranked_by,
+        listings: result.listings,
+        details: result.details,
+      };
 
-        const text = [
-          `## Deep Search${result.description ? `: ${result.description}` : ""}`,
-          "",
-          `Scanned **${result.scanned_pages}** page(s) → **${result.scanned_listings}** distinct listings (of ${result.total.toLocaleString()} total), ranked by **${result.ranked_by}**. Full details fetched for the top **${result.details.length}**.`,
-          ...(outcome.note ? [`ℹ️ ${outcome.note}`] : []),
-          "",
-          "### Top matches",
-          formatListings(result.listings.slice(0, 10)),
-          "",
-          `Full attribute sets, images, seller and address info for the top ${result.details.length} listings are in \`structuredContent.details\`.`,
-        ].join("\n");
+      const text = [
+        `## Deep Search${result.description ? `: ${result.description}` : ""}`,
+        "",
+        `Scanned **${result.scanned_pages}** page(s) → **${result.scanned_listings}** distinct listings (of ${result.total.toLocaleString()} total), ranked by **${result.ranked_by}**. Full details fetched for the top **${result.details.length}**.`,
+        ...(outcome.note ? [`ℹ️ ${outcome.note}`] : []),
+        "",
+        "### Top matches",
+        formatListings(result.listings),
+        "",
+        `Full attribute sets, images, seller and address info for the top ${result.details.length} listings are in \`structuredContent.details\`.`,
+      ].join("\n");
 
-        return { content: [{ type: "text", text }], structuredContent: payload };
-      } catch (error) {
-        return errorResult("Error in deep search", error);
-      }
-    }
+      return { content: [{ type: "text", text }], structuredContent: payload };
+    })
   );
 
   // -------------------------------------------------------------------------
@@ -575,25 +572,21 @@ export function createServer(): McpServer {
       annotations: READ_ONLY,
       _meta: UI_TOOL_META,
     },
-    async (params) => {
-      try {
-        const detail = await getListingDetail(params.id);
+    handleTool("Error getting listing detail", async (params) => {
+      const detail = await getListingDetail(params.id);
 
-        if (!detail) {
-          return {
-            content: [{ type: "text", text: `Listing ${params.id} not found. Make sure the ID is correct.` }],
-            isError: true,
-          };
-        }
-
+      if (!detail) {
         return {
-          content: [{ type: "text", text: formatDetail(detail) }],
-          structuredContent: { listing: detail },
+          content: [{ type: "text", text: `Listing ${params.id} not found. Make sure the ID is correct.` }],
+          isError: true,
         };
-      } catch (error) {
-        return errorResult("Error getting listing detail", error);
       }
-    }
+
+      return {
+        content: [{ type: "text", text: formatDetail(detail) }],
+        structuredContent: { listing: detail },
+      };
+    })
   );
 
   // -------------------------------------------------------------------------
@@ -716,7 +709,7 @@ export function createServer(): McpServer {
               "## Steps",
               "1. Pick the vertical: real_estate (apartment/Wohnung/house/rent/m²/rooms) → willhaben_search_real_estate; cars (brand/model, diesel/petrol, km, automatic) → willhaben_search_cars; jobs → willhaben_search_jobs; anything else → willhaben_search_marketplace.",
               "2. Map filters: 'under/below X' → price_to, 'over/from X' → price_from (parse 300k/€300.000 → 300000); location → `location` (jobs: fold the place into `keyword` instead); real estate: rooms/area_from/area_to/property_type/action; cars: make/model/year_from/year_to/mileage_to/fuel_type/transmission/condition. Default sort 'newest'; keep rows modest (12).",
-              "3. For a thorough value hunt ('best deal', 'compare', 'find me the best...'), prefer willhaben_deep_search with rank_by 'price_per_m2' (real estate) or 'price_asc'.",
+              "3. For a thorough value hunt ('best deal', 'compare', 'find me the best...'), ALSO call willhaben_deep_search with the SAME filters mapped in step 2 — do not skip the specialized mapping. Pass rooms/location/price_to/property_type/action (real estate) or make/model/fuel_type/transmission/condition (cars) or condition/category (marketplace) through. Example: 'best 2-room Graz apartment under 300k' still includes rooms, location, and price_to on the deep search call (rank_by 'price_per_m2'); cars/marketplace use rank_by 'price_asc'.",
               "4. Present a markdown table (columns per vertical: real estate # · Title · Price · €/m² · Size · Rooms · Location · Link; cars # · Title · Price · Year · km · Fuel · Gearbox · Location · Link; jobs # · Title · Company · Location · Type · Link; marketplace # · Title · Price · Condition · Location · Link). Below the table: total match count and a one-line verdict naming the best 1–2 options and any red flags.",
               "5. If asked for more on a row, call willhaben_get_listing with that id.",
               "",

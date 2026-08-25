@@ -360,6 +360,9 @@ export interface SearchInput {
 }
 
 export interface RealEstateSearchInput {
+  keyword?: string;
+  /** Explicit willhaben category path; when set, wins over property_type/action. */
+  category?: string;
   property_type?: string;
   action?: "buy" | "rent";
   location?: string;
@@ -376,6 +379,7 @@ export interface RealEstateSearchInput {
 }
 
 export interface CarSearchInput {
+  keyword?: string;
   make?: string;
   model?: string;
   location?: string;

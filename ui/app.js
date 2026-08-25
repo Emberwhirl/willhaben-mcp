@@ -70,8 +70,28 @@ function chipsFor(listing) {
   return chips.slice(0, 4);
 }
 
+const ALLOWED_LISTING_HOSTS = new Set(["www.willhaben.at", "willhaben.at"]);
+const ALLOWED_IMAGE_HOSTS = new Set(["cache.willhaben.at", "www.willhaben.at", "willhaben.at"]);
+const PAGINATION_TOOLS = new Set([
+  "willhaben_search",
+  "willhaben_search_real_estate",
+  "willhaben_search_cars",
+  "willhaben_search_jobs",
+  "willhaben_search_marketplace",
+]);
+
+function httpsHostAllowed(url, hosts) {
+  if (!url || typeof url !== "string") return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && hosts.has(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function openListing(url) {
-  if (!url) return;
+  if (!httpsHostAllowed(url, ALLOWED_LISTING_HOSTS)) return;
   app.openLink({ url }).catch(() => {});
 }
 
@@ -122,7 +142,7 @@ function renderCard(listing, detailIds) {
   card.setAttribute("aria-label", labelParts.join(", ") + " — opens the listing on willhaben.at");
 
   const imageWrap = el("div", "wh-card-image");
-  if (listing.image_url) {
+  if (httpsHostAllowed(listing.image_url, ALLOWED_IMAGE_HOSTS)) {
     const img = document.createElement("img");
     img.loading = "lazy";
     img.alt = "";
@@ -181,12 +201,11 @@ function renderGallery(payload) {
   for (const listing of listings) grid.appendChild(renderCard(listing, detailIds));
   wrap.appendChild(grid);
 
-  // Pagination via the echoed query (search tools only).
+  // Pagination via the echoed query (allowlisted search tools only).
   const query = payload.query;
   const canPaginate =
     query &&
-    query.tool &&
-    query.tool !== "willhaben_deep_search" &&
+    PAGINATION_TOOLS.has(query.tool) &&
     typeof payload.total === "number" &&
     listings.length < payload.total;
 
@@ -195,6 +214,7 @@ function renderGallery(payload) {
     button.disabled = state.loadingMore;
     button.addEventListener("click", async () => {
       if (state.loadingMore) return;
+      if (!PAGINATION_TOOLS.has(query.tool)) return;
       state.loadingMore = true;
       render();
       try {
@@ -250,7 +270,8 @@ function renderDetail(listing) {
   header.appendChild(meta);
   wrap.appendChild(header);
 
-  const images = listing.images || [];
+  const rawImages = listing.images || [];
+  const images = rawImages.filter((src) => httpsHostAllowed(src, ALLOWED_IMAGE_HOSTS));
   if (images.length) {
     const gallery = el("div", "wh-detail-gallery");
     const hero = document.createElement("img");
@@ -267,13 +288,15 @@ function renderDetail(listing) {
         t.alt = "";
         t.src = src;
         t.addEventListener("click", () => {
-          hero.src = src;
+          if (httpsHostAllowed(src, ALLOWED_IMAGE_HOSTS)) hero.src = src;
         });
         thumbs.appendChild(t);
       });
       gallery.appendChild(thumbs);
     }
     wrap.appendChild(gallery);
+  } else if (rawImages.length) {
+    wrap.appendChild(el("div", "wh-card-image-placeholder", "📷"));
   }
 
   const facts = el("dl", "wh-facts");

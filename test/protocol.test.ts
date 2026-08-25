@@ -82,11 +82,16 @@ async function rawWireProbe(): Promise<void> {
   });
   child.kill();
 
-  const result = (response as { result?: { ttlMs?: number; cacheScope?: string; tools?: unknown[] } } | null)?.result;
+  const result = (response as {
+    result?: { ttlMs?: number; cacheScope?: string; tools?: unknown[]; resultType?: string };
+  } | null)?.result;
   assert(result !== undefined && result !== null, "modern stateless request answered without initialize handshake");
   assert(Array.isArray(result?.tools) && result!.tools!.length === 8, `8 tools listed (got ${result?.tools?.length})`);
   assert(result?.ttlMs === 6 * 60 * 60 * 1000, `tools/list ttlMs is 6h (got ${result?.ttlMs})`);
   assert(result?.cacheScope === "public", `tools/list cacheScope is public (got ${result?.cacheScope})`);
+  if (result && Object.prototype.hasOwnProperty.call(result, "resultType")) {
+    assert(result.resultType === "complete", `tools/list resultType is complete (got ${result.resultType})`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +140,10 @@ async function clientSession(): Promise<void> {
     assert(realEstate?.annotations?.openWorldHint === true, "openWorldHint on search tool");
     assert(realEstate?.title === "Search real estate", "title on search tool");
     assert(realEstate?.outputSchema !== undefined, "outputSchema on search tool");
+    assert(
+      tools.every((t) => t.outputSchema !== undefined),
+      `every tool has outputSchema (missing: ${tools.filter((t) => !t.outputSchema).map((t) => t.name).join(", ") || "none"})`
+    );
     const uiMeta = (realEstate?._meta as { ui?: { resourceUri?: string } } | undefined)?.ui;
     assert(uiMeta?.resourceUri === "ui://willhaben/results.html", "MCP Apps resourceUri on search tool");
 
@@ -225,9 +234,47 @@ async function clientSession(): Promise<void> {
   }
 }
 
+// First Gemeinde candidate in test/fixtures/area-neusiedl.json (Gemeinde → PLZ → Ort).
+const NEUSIEDL_FIRST_CANDIDATE_AREA_ID = "30733";
+
+async function noElicitationSession(): Promise<void> {
+  section("no elicitation capability: first-candidate fallback (never hard-fail)");
+
+  const client = new Client({ name: "willhaben-protocol-test-no-elicit", version: "1.0.0" }, { capabilities: {} });
+
+  const transport = new StdioClientTransport({
+    command: "node",
+    args: [serverPath],
+    env: { ...process.env, WILLHABEN_MCP_FIXTURES: fixturesDir } as Record<string, string>,
+    cwd: root,
+  });
+
+  await client.connect(transport);
+
+  try {
+    const fallback = await client.callTool({
+      name: "willhaben_search_real_estate",
+      arguments: { location: "Neusiedl", rows: 3 },
+    });
+    const fallbackPayload = fallback.structuredContent as any;
+    assert(fallback.isError !== true, "search without elicitation does not hard-fail");
+    assert(
+      Array.isArray(fallbackPayload?.listings) && fallbackPayload.listings.length > 0,
+      `structuredContent has listings (got ${fallbackPayload?.listings?.length})`
+    );
+    assert(
+      fallbackPayload?.query?.args?.area_id === NEUSIEDL_FIRST_CANDIDATE_AREA_ID,
+      `first-candidate areaId is ${NEUSIEDL_FIRST_CANDIDATE_AREA_ID} (got ${fallbackPayload?.query?.args?.area_id})`
+    );
+  } finally {
+    await client.close();
+  }
+}
+
 try {
   await rawWireProbe();
   await clientSession();
+  await noElicitationSession();
 } catch (error) {
   failed++;
   console.error("\n❌ Unhandled test error:", error);

@@ -12,9 +12,10 @@
 // Tasks extension (io.modelcontextprotocol/tasks) lands in the TypeScript
 // server SDK, this is the natural candidate to return a task handle instead.
 
-import { searchListings } from "./search.js";
+import { searchCars, searchMarketplace, searchRealEstate } from "./search.js";
 import { getListingDetail } from "./detail.js";
 import type { SimplifiedListing, SimplifiedListingDetail } from "./types.js";
+import { isAbortError, runWithAbortSignal, throwIfAborted, WillhabenBlockedError } from "./httpClient.js";
 
 export interface DeepSearchInput {
   vertical: "real_estate" | "cars" | "marketplace";
@@ -28,6 +29,23 @@ export interface DeepSearchInput {
   pages?: number;
   detail_limit?: number;
   rank_by?: "price_asc" | "price_desc" | "price_per_m2" | "none";
+  // Real estate (same fields as willhaben_search_real_estate)
+  property_type?: string;
+  action?: "buy" | "rent";
+  rooms?: number;
+  area_from?: number;
+  area_to?: number;
+  // Cars (same fields as willhaben_search_cars)
+  make?: string;
+  model?: string;
+  year_from?: number;
+  year_to?: number;
+  mileage_from?: number;
+  mileage_to?: number;
+  fuel_type?: string;
+  transmission?: string;
+  // Cars + marketplace
+  condition?: string;
 }
 
 export interface DeepSearchResult {
@@ -94,8 +112,54 @@ function rank(listings: SimplifiedListing[], rankBy: string): SimplifiedListing[
 }
 
 function checkAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) {
-    throw new Error("Deep search cancelled by the client.");
+  throwIfAborted(signal);
+}
+
+function searchDeepPage(input: DeepSearchInput, page: number) {
+  const sort = input.sort ?? "newest";
+  const shared = {
+    location: input.location,
+    area_id: input.area_id,
+    price_from: input.price_from,
+    price_to: input.price_to,
+    sort,
+    rows: DEEP_SEARCH_ROWS,
+    page,
+  };
+
+  switch (input.vertical) {
+    case "real_estate":
+      return searchRealEstate({
+        ...shared,
+        keyword: input.keyword,
+        category: input.category,
+        property_type: input.property_type,
+        action: input.action,
+        rooms: input.rooms,
+        area_from: input.area_from,
+        area_to: input.area_to,
+      });
+    case "cars":
+      return searchCars({
+        ...shared,
+        keyword: input.keyword,
+        make: input.make,
+        model: input.model,
+        year_from: input.year_from,
+        year_to: input.year_to,
+        mileage_from: input.mileage_from,
+        mileage_to: input.mileage_to,
+        fuel_type: input.fuel_type,
+        transmission: input.transmission,
+        condition: input.condition,
+      });
+    case "marketplace":
+      return searchMarketplace({
+        ...shared,
+        keyword: input.keyword,
+        category: input.category,
+        condition: input.condition,
+      });
   }
 }
 
@@ -103,14 +167,21 @@ export async function deepSearch(
   input: DeepSearchInput,
   options: { signal?: AbortSignal; onProgress?: ProgressReporter } = {}
 ): Promise<DeepSearchResult> {
+  return runWithAbortSignal(options.signal, () => deepSearchBody(input, options));
+}
+
+async function deepSearchBody(
+  input: DeepSearchInput,
+  options: { signal?: AbortSignal; onProgress?: ProgressReporter }
+): Promise<DeepSearchResult> {
   const { signal, onProgress } = options;
   const pages = Math.min(Math.max(input.pages ?? 2, 1), DEEP_SEARCH_MAX_PAGES);
   const detailLimit = Math.min(Math.max(input.detail_limit ?? 5, 0), DEEP_SEARCH_MAX_DETAILS);
   const rankBy = input.rank_by ?? (input.vertical === "real_estate" ? "price_per_m2" : "price_asc");
 
-  // `total` may shrink once the actual page/detail counts are known (early
-  // page break, fewer listings than detail_limit) — allowed by the spec.
-  let totalSteps = pages + detailLimit;
+  // MCP progress `total` must stay stable for the whole run (do not shrink
+  // after an early page break or fewer-than-limit details).
+  const totalSteps = pages + detailLimit;
   let step = 0;
   const report = async (message: string) => {
     step += 1;
@@ -125,18 +196,7 @@ export async function deepSearch(
 
   for (let pageNo = 1; pageNo <= pages; pageNo++) {
     checkAborted(signal);
-    const result = await searchListings({
-      vertical: input.vertical,
-      keyword: input.keyword,
-      category: input.category,
-      location: input.location,
-      area_id: input.area_id,
-      price_from: input.price_from,
-      price_to: input.price_to,
-      sort: input.sort ?? "newest",
-      rows: DEEP_SEARCH_ROWS,
-      page: pageNo,
-    });
+    const result = await searchDeepPage(input, pageNo);
     scannedPages = pageNo;
     total = result.total;
     description = description ?? result.description;
@@ -152,7 +212,6 @@ export async function deepSearch(
 
   // Phase 2: pull details for the top-ranked listings.
   const detailTargets = ranked.slice(0, detailLimit);
-  totalSteps = scannedPages + detailTargets.length;
   const details: SimplifiedListingDetail[] = [];
   for (const listing of detailTargets) {
     checkAborted(signal);
@@ -164,7 +223,8 @@ export async function deepSearch(
       } else {
         await report(`Skipped listing ${listing.id} (no longer available)`);
       }
-    } catch {
+    } catch (error) {
+      if (isAbortError(error) || error instanceof WillhabenBlockedError) throw error;
       await report(`Skipped listing ${listing.id} (detail fetch failed)`);
     }
   }

@@ -2,7 +2,8 @@
 import { WillhabenJobsSearchResult, WillhabenJobAd, SimplifiedListing, VerticalId } from "./types.js";
 import { fetchPublicApi, scrapeSearchResults } from "./scraper.js";
 import { attributesToMap, simplifyAdSummary, stripRedundantAttributes } from "./search.js";
-import { SORT_CODES } from "../utils/constants.js";
+import { SORT_CODES, clampSearchPaging } from "../utils/constants.js";
+import { isAbortError, WillhabenBlockedError } from "./httpClient.js";
 
 /**
  * Simplify a job ad into a clean, readable format
@@ -43,7 +44,8 @@ export async function searchJobs(input: {
   rows?: number;
   page?: number;
 }) {
-  const { keyword, job_type, sort = "newest", rows = 30, page = 1 } = input;
+  const { keyword, job_type, sort = "newest" } = input;
+  const { rows, page } = clampSearchPaging(input.rows, input.page);
 
   const params = new URLSearchParams();
   params.set("rows", String(rows));
@@ -83,7 +85,9 @@ export async function searchJobs(input: {
       description: result.searchTitle,
     };
   } catch (error) {
-    // Fallback: try scraping the jobs page
+    if (isAbortError(error) || error instanceof WillhabenBlockedError) throw error;
+    // Fallback: try scraping the jobs page only when the public API is down,
+    // not when the client cancelled or willhaben asked us to back off.
     return searchJobsViaScraping(keyword, rows, page, sort);
   }
 }
@@ -91,7 +95,8 @@ export async function searchJobs(input: {
 /**
  * Fallback: Search jobs via page scraping
  */
-async function searchJobsViaScraping(keyword?: string, rows: number = 30, page: number = 1, sort?: string) {
+async function searchJobsViaScraping(keyword?: string, rowsIn: number = 30, pageIn: number = 1, sort?: string) {
+  const { rows, page } = clampSearchPaging(rowsIn, pageIn);
   const params = new URLSearchParams();
   params.set("rows", String(rows));
   params.set("page", String(page));
@@ -110,8 +115,8 @@ async function searchJobsViaScraping(keyword?: string, rows: number = 30, page: 
 
   return {
     total: result.rowsFound,
-    page: result.pageRequested,
-    rows_per_page: result.rowsRequested,
+    page: result.pageRequested ?? page,
+    rows_per_page: result.rowsRequested ?? rows,
     listings,
     vertical: "jobs",
     description: result.searchTitle,

@@ -18,13 +18,14 @@ import {
   TRANSMISSION_IDS,
   CONDITION_IDS,
   VERTICAL_NAMES,
+  clampSearchPaging,
 } from "../utils/constants.js";
 
 /**
  * Flatten willhaben's attribute list into a name → value(s) map.
  */
 export function attributesToMap(attributes: WillhabenAttribute[] | undefined): Record<string, string | string[]> {
-  const attrs: Record<string, string | string[]> = {};
+  const attrs = Object.create(null) as Record<string, string | string[]>;
   for (const attr of attributes ?? []) {
     attrs[attr.name] = attr.values.length === 1 ? attr.values[0] : attr.values;
   }
@@ -103,7 +104,8 @@ export function simplifyAdSummary(ad: WillhabenAdSummary): SimplifiedListing {
  * Universal search across all verticals
  */
 export async function searchListings(input: SearchInput) {
-  const { vertical: verticalName, keyword, category, rows = 30, page = 1, sort, price_from, price_to, location, area_id } = input;
+  const { vertical: verticalName, keyword, category, sort, price_from, price_to, location, area_id } = input;
+  const { rows, page } = clampSearchPaging(input.rows, input.page);
 
   const verticalMap: Record<string, number> = {
     marketplace: VerticalId.MARKTPLATZ,
@@ -184,8 +186,8 @@ export async function searchListings(input: SearchInput) {
 
   return {
     total: result.rowsFound,
-    page: result.pageRequested,
-    rows_per_page: result.rowsRequested,
+    page: result.pageRequested ?? page,
+    rows_per_page: result.rowsRequested ?? rows,
     listings,
     vertical: verticalName,
     description: result.searchTitle,
@@ -251,9 +253,11 @@ export function resolveRealEstateCategory(propertyType: string | undefined, acti
  * Search real estate listings
  */
 export async function searchRealEstate(input: RealEstateSearchInput) {
-  const { property_type, action = "buy", location, area_id, price_from, price_to, rooms, area_from, area_to, sort, rows = 30, page = 1 } = input;
+  const { keyword, category, property_type, action = "buy", location, area_id, price_from, price_to, rooms, area_from, area_to, sort } = input;
+  const { rows, page } = clampSearchPaging(input.rows, input.page);
 
-  const categoryPath = resolveRealEstateCategory(property_type, action === "rent" ? "rent" : "buy");
+  // Explicit category path (e.g. from deep search) wins over property_type/action.
+  const categoryPath = category || resolveRealEstateCategory(property_type, action === "rent" ? "rent" : "buy");
 
   const params: Record<string, string> = {
     rows: String(rows),
@@ -265,6 +269,7 @@ export async function searchRealEstate(input: RealEstateSearchInput) {
     if (sortCode) params.sort = sortCode;
   }
 
+  if (keyword) params.keyword = keyword;
   if (price_from !== undefined) params.PRICE_FROM = String(price_from);
   if (price_to !== undefined) params.PRICE_TO = String(price_to);
   if (rooms) params.NUMBER_OF_ROOMS = String(rooms);
@@ -288,8 +293,8 @@ export async function searchRealEstate(input: RealEstateSearchInput) {
 
   return {
     total: result.rowsFound,
-    page: result.pageRequested,
-    rows_per_page: result.rowsRequested,
+    page: result.pageRequested ?? page,
+    rows_per_page: result.rowsRequested ?? rows,
     listings,
     vertical: "real_estate",
     description: result.searchTitle,
@@ -300,7 +305,8 @@ export async function searchRealEstate(input: RealEstateSearchInput) {
  * Search car listings
  */
 export async function searchCars(input: CarSearchInput) {
-  const { make, model, location, area_id, price_from, price_to, year_from, year_to, mileage_from, mileage_to, fuel_type, transmission, condition, sort, rows = 30, page = 1 } = input;
+  const { keyword, make, model, location, area_id, price_from, price_to, year_from, year_to, mileage_from, mileage_to, fuel_type, transmission, condition, sort } = input;
+  const { rows, page } = clampSearchPaging(input.rows, input.page);
 
   const params: Record<string, string> = {
     rows: String(rows),
@@ -325,6 +331,7 @@ export async function searchCars(input: CarSearchInput) {
     if (/^\d+$/.test(model)) params[CAR_FILTER_PARAMS.model] = model;
     else keywordParts.push(model);
   }
+  if (keyword) keywordParts.push(keyword);
   if (keywordParts.length > 0) params.keyword = keywordParts.join(" ");
 
   if (area_id) {
@@ -364,8 +371,8 @@ export async function searchCars(input: CarSearchInput) {
 
   return {
     total: result.rowsFound,
-    page: result.pageRequested,
-    rows_per_page: result.rowsRequested,
+    page: result.pageRequested ?? page,
+    rows_per_page: result.rowsRequested ?? rows,
     listings,
     vertical: "cars",
     description: result.searchTitle,
@@ -390,7 +397,8 @@ export interface MarketplaceSearchInput {
  * Search marketplace listings
  */
 export async function searchMarketplace(input: MarketplaceSearchInput = {}) {
-  const { keyword, category, condition, location, area_id, price_from, price_to, sort, rows = 30, page = 1 } = input;
+  const { keyword, category, condition, location, area_id, price_from, price_to, sort } = input;
+  const { rows, page } = clampSearchPaging(input.rows, input.page);
 
   const params: Record<string, string> = {
     rows: String(rows),
@@ -439,8 +447,8 @@ export async function searchMarketplace(input: MarketplaceSearchInput = {}) {
 
   return {
     total: result.rowsFound,
-    page: result.pageRequested,
-    rows_per_page: result.rowsRequested,
+    page: result.pageRequested ?? page,
+    rows_per_page: result.rowsRequested ?? rows,
     listings,
     vertical: "marketplace",
     description: result.searchTitle,

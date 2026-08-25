@@ -15,6 +15,7 @@
     "check": "node scripts/build-ui.mjs && tsc --noEmit --noUnusedLocals --noUnusedParameters",
     "test": "tsx test/integration.test.ts && tsx test/filters.test.ts",
     "test:protocol": "tsx test/protocol.test.ts && tsx test/legacy-compat.test.ts",
+    "test:rate-limit": "tsx test/rate-limit.test.ts",
     "test:filters": "tsx test/filters.test.ts",
     "test:categories": "tsx test/categories.test.ts"
   },

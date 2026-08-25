@@ -37,7 +37,19 @@ If genuinely ambiguous, use `willhaben_search` with your best-guess `vertical`.
 - **Result count**: keep it small and polite — default `rows: 12` (max 25 here even if more is asked;
   paginate with `page` only if the user explicitly wants more). Do not loop many pages.
 
-## Step 3 — Present results
+## Step 3 — Value hunts (in addition, same filters)
+
+For a thorough value hunt ("best deal", "compare", "find me the best…"), ALSO call
+`willhaben_deep_search` with the **same filters** from Step 2 — do not skip the specialized
+mapping. Pass `rooms` / `location` / `price_to` / `property_type` / `action` (real estate), or
+`make` / `model` / `fuel_type` / `transmission` / `condition` (cars), or `condition` / `category`
+(marketplace) through.
+
+Example: "best 2-room Graz apartment under 300k" → `willhaben_deep_search` with `rooms`,
+`location`, and `price_to` (plus `property_type`/`action` if known), `rank_by: price_per_m2` —
+not keyword-only. Cars/marketplace: same mapped filters plus `rank_by: price_asc`.
+
+## Step 4 — Present results
 
 Output a compact markdown table, most relevant first. Choose columns by vertical:
 
@@ -55,7 +67,7 @@ Rules:
 - If a filter clearly wasn't honored (e.g. a result above `price_to`), say so briefly.
 - If 0 results, suggest loosening one filter.
 
-## Step 4 (optional) — Details on request
+## Step 5 (optional) — Details on request
 
 If the user asks for more on a specific row, call `willhaben_get_listing` with that `id`
 and summarize: description highlights, all images count, seller (private/dealer), address,

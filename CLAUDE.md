@@ -23,6 +23,7 @@ npm run build                      # build-ui (esbuild → generated HTML module
 npm run dev                        # build-ui + tsx src/index.ts
 npm run check                      # build-ui + strict tsc (generated module must exist first)
 npm run test:protocol              # OFFLINE: fixtures-driven MCP protocol + legacy-compat tests (needs build)
+npm run test:rate-limit            # OFFLINE: abort / 429 backoff / geo-dedupe against the HTTP funnel
 npx tsx test/integration.test.ts   # smoke test per vertical (hits live willhaben)
 npx tsx test/filters.test.ts       # asserts every filter actually narrows results
 npx tsx test/categories.test.ts    # asserts every category in constants.ts resolves live

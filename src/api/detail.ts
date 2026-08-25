@@ -12,17 +12,50 @@ import { VERTICAL_NAMES } from "../utils/constants.js";
  * yields everything. (The publicapi `/atdetail/v1/{id}` endpoint returns a
  * widget-based payload that requires an application token, so it is not used.)
  */
+const LISTING_ID_RE = /^\d{1,16}$/;
+
 export async function getListingDetail(id: string): Promise<SimplifiedListingDetail | null> {
-  const adDetail = await scrapeAdDetail(`/iad/object?adId=${id}`);
+  if (!LISTING_ID_RE.test(id)) {
+    throw new Error("Invalid listing id: must be 1-16 digits");
+  }
+  const adDetail = await scrapeAdDetail(`/iad/object?adId=${encodeURIComponent(id)}`);
   return adDetail ? simplifyAdDetail(adDetail) : null;
+}
+
+/**
+ * Relative willhaben SEO path only (no absolute URLs, `..`, query, hash, or schemes).
+ * Bare slugs get the `/iad/` prefix; paths that already start with `/iad/` are kept.
+ */
+function resolveSeoUrlPath(seoUrl: string): string {
+  const trimmed = seoUrl.trim();
+  if (!trimmed) {
+    throw new Error("Invalid SEO path");
+  }
+  if (
+    trimmed.includes("..") ||
+    trimmed.includes("//") ||
+    /[?#\\]/.test(trimmed) ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)
+  ) {
+    throw new Error("Invalid SEO path");
+  }
+
+  const urlPath = trimmed.startsWith("/") ? trimmed : `/iad/${trimmed}`;
+  if (!urlPath.startsWith("/iad/") || urlPath === "/iad/") {
+    throw new Error("Invalid SEO path");
+  }
+  const rest = urlPath.slice("/iad/".length);
+  if (rest.split("/").some((seg) => seg.length === 0)) {
+    throw new Error("Invalid SEO path");
+  }
+  return urlPath;
 }
 
 /**
  * Get listing detail by SEO URL (more reliable than ID-only)
  */
 export async function getListingDetailBySeoUrl(seoUrl: string): Promise<SimplifiedListingDetail | null> {
-  // Ensure URL starts with /iad/
-  const urlPath = seoUrl.startsWith("/") ? seoUrl : `/iad/${seoUrl}`;
+  const urlPath = resolveSeoUrlPath(seoUrl);
   const adDetail = await scrapeAdDetail(urlPath);
 
   if (!adDetail) {

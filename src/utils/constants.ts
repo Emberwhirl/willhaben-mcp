@@ -22,17 +22,50 @@ function buildQuery(params: Record<string, string>, exclude: string[] = ["catego
   return qs ? "?" + qs : "";
 }
 
+const CATEGORY_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/**
+ * Category is interpolated into the URL path. Only `[A-Za-z0-9_-]` segments
+ * joined by a single `/` are allowed, so `?` / `..` / `//` cannot inject a
+ * query string or escape the vertical prefix (and the 100-row cap).
+ * Empty category is allowed (unfiltered marketplace).
+ */
+export function sanitizeCategoryPath(category: string | undefined): string {
+  if (category == null || category === "") return "";
+  if (
+    category.includes("..") ||
+    category.includes("//") ||
+    /[?#\\]/.test(category) ||
+    /[a-zA-Z][a-zA-Z0-9+.-]*:/.test(category)
+  ) {
+    throw new Error("Invalid category path");
+  }
+  const segments = category.split("/");
+  if (segments.some((seg) => !CATEGORY_SEGMENT_RE.test(seg))) {
+    throw new Error("Invalid category path");
+  }
+  return segments.join("/");
+}
+
+/** Cap rows at 100 and page at 200 so callers cannot bypass the server-layer clamp. */
+export function clampSearchPaging(rows?: number, page?: number): { rows: number; page: number } {
+  return {
+    rows: Math.min(Math.max(Math.trunc(rows ?? 30), 1), 100),
+    page: Math.min(Math.max(Math.trunc(page ?? 1), 1), 200),
+  };
+}
+
 // URL patterns for each vertical
 export const SEARCH_URL_PATTERNS: Record<number, (params: Record<string, string>) => string> = {
   [VerticalId.IMMOBILIEN]: (params) => {
-    const category = params.category || "eigentumswohnung/eigentumswohnung-angebote";
+    const category = sanitizeCategoryPath(params.category) || "eigentumswohnung/eigentumswohnung-angebote";
     return `/iad/immobilien/${category}${buildQuery(params)}`;
   },
   [VerticalId.AUTO_MOTOR]: (params) => {
     return `/iad/gebrauchtwagen/auto/gebrauchtwagenboerse${buildQuery(params)}`;
   },
   [VerticalId.MARKTPLATZ]: (params) => {
-    const category = params.category || "";
+    const category = sanitizeCategoryPath(params.category);
     const base = category
       ? `/iad/kaufen-und-verkaufen/marktplatz/${category}`
       : `/iad/kaufen-und-verkaufen/marktplatz`;

@@ -114,8 +114,8 @@ export const deepSearchResultSchema = z.object({
 // Tool input schemas
 // ---------------------------------------------------------------------------
 
-const rows = z.number().optional().describe("Results per page (default: 30, max: 100)");
-const page = z.number().optional().describe("Page number (default: 1)");
+const rows = z.number().int().min(1).max(100).optional().describe("Results per page (default: 30, max: 100)");
+const page = z.number().int().min(1).max(200).optional().describe("Page number (default: 1)");
 const locationParam = z
   .string()
   .optional()
@@ -190,7 +190,10 @@ export const marketplaceInputSchema = z.object({
 });
 
 export const getListingInputSchema = z.object({
-  id: z.string().describe("The willhaben listing/ad ID (e.g., '1370327604')"),
+  id: z
+    .string()
+    .regex(/^\d{1,16}$/)
+    .describe("The willhaben listing/ad ID (e.g., '1370327604')"),
 });
 
 export const getCategoriesInputSchema = z.object({
@@ -205,10 +208,27 @@ export const deepSearchInputSchema = z.object({
   price_from: priceFrom,
   price_to: priceTo,
   sort: z.string().optional().describe("willhaben sort to scan in: 'newest' (default), 'price_asc', ..."),
-  pages: z.number().optional().describe("Result pages to scan, 1-3 (default 2). Each page is one polite request."),
-  detail_limit: z.number().optional().describe("How many top-ranked listings to fetch full details for, 0-8 (default 5). Each detail is one polite request."),
+  pages: z.number().int().min(1).max(3).optional().describe("Result pages to scan, 1-3 (default 2). Each page is one polite request."),
+  detail_limit: z.number().int().min(0).max(8).optional().describe("How many top-ranked listings to fetch full details for, 0-8 (default 5). Each detail is one polite request."),
   rank_by: z
     .enum(["price_asc", "price_desc", "price_per_m2", "none"])
     .optional()
     .describe("Client-side ranking across all scanned pages. 'price_per_m2' is best for real estate value hunting (default there); elsewhere defaults to 'price_asc'."),
+  // Real estate — same fields / describes as willhaben_search_real_estate
+  property_type: z.string().optional().describe("Property type: 'eigentumswohnung' (apartment), 'haus' (house), 'mietwohnung' (rental), 'grundstueck' (land)"),
+  action: z.enum(["buy", "rent"]).optional().describe("Buy or rent (default: buy)"),
+  rooms: z.number().optional().describe("Number of rooms"),
+  area_from: z.number().optional().describe("Minimum living area in m²"),
+  area_to: z.number().optional().describe("Maximum living area in m²"),
+  // Cars — same fields / describes as willhaben_search_cars
+  make: z.string().optional().describe("Car brand (e.g., 'BMW', 'Audi'). Matched as a keyword unless a numeric willhaben make ID is given."),
+  model: z.string().optional().describe("Car model (matched as a keyword)"),
+  year_from: z.number().optional().describe("Minimum year of construction"),
+  year_to: z.number().optional().describe("Maximum year of construction"),
+  mileage_from: z.number().optional().describe("Minimum mileage in km"),
+  mileage_to: z.number().optional().describe("Maximum mileage in km"),
+  fuel_type: z.string().optional().describe("Fuel type: 'petrol', 'diesel', 'electric', 'hybrid_petrol', 'hybrid_diesel'"),
+  transmission: z.string().optional().describe("Transmission: 'manual' or 'automatic'"),
+  // Cars + marketplace condition (vertical decides the encoding)
+  condition: z.string().optional().describe("Cars: 'used', 'new', 'year_old'. Marketplace: 'neu'/'new', 'gebraucht'/'used', or 'defekt'/'defective'"),
 });

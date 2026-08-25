@@ -18,8 +18,7 @@
 // silently guessing.
 
 import { WILLHABEN_BASE_URL, resolveAreaId } from "../utils/constants.js";
-import { rateLimit } from "./scraper.js";
-import { httpJson } from "./httpClient.js";
+import { httpJson, isAbortError, WillhabenBlockedError } from "./httpClient.js";
 
 export interface AreaEntry {
   areaId: number;
@@ -44,8 +43,31 @@ export type LocationResolution =
   | { kind: "ambiguous"; candidates: AreaCandidate[] }
   | { kind: "unresolved" };
 
-// Cache resolved lookups for the session to avoid repeat network calls.
-const areaCache = new Map<string, string | null>();
+// Resolved / missed lookups. Bounded + TTL so a long session cannot grow
+// without limit, and a transient autocomplete failure is not remembered forever.
+const AREA_CACHE_MAX = 50;
+const AREA_CACHE_TTL_MS = 10 * 60 * 1000;
+const AREA_NEGATIVE_TTL_MS = 60 * 1000;
+const areaCache = new Map<string, { value: string | null; timestamp: number }>();
+
+function areaCacheGet(key: string): string | null | undefined {
+  const hit = areaCache.get(key);
+  if (!hit) return undefined;
+  const ttl = hit.value === null ? AREA_NEGATIVE_TTL_MS : AREA_CACHE_TTL_MS;
+  if (Date.now() - hit.timestamp >= ttl) {
+    areaCache.delete(key);
+    return undefined;
+  }
+  return hit.value;
+}
+
+function areaCacheSet(key: string, value: string | null): void {
+  if (areaCache.size >= AREA_CACHE_MAX && !areaCache.has(key)) {
+    const oldest = areaCache.keys().next().value;
+    if (oldest !== undefined) areaCache.delete(oldest);
+  }
+  areaCache.set(key, { value, timestamp: Date.now() });
+}
 
 // Cache raw suggestion groups so that a multi-round-trip retry (the client
 // re-issuing the same search after the user picked an area) does not pay a
@@ -65,7 +87,6 @@ export async function lookupAreaSuggestions(term: string): Promise<AreaGroup[]> 
     return cached.groups;
   }
 
-  await rateLimit();
   const url = `${WILLHABEN_BASE_URL}/webapi/autocomplete/area?term=${encodeURIComponent(term)}&source=desktop`;
   const response = await httpJson<AreaGroup[]>(url);
   if (!response.ok) {
@@ -110,8 +131,8 @@ export async function resolveLocationDetailed(location: string, maxCandidates = 
 
   // Previously disambiguated or resolved this session.
   const cacheKey = trimmed.toLowerCase();
-  if (areaCache.has(cacheKey)) {
-    const cached = areaCache.get(cacheKey)!;
+  const cached = areaCacheGet(cacheKey);
+  if (cached !== undefined) {
     return cached ? { kind: "resolved", areaId: cached } : { kind: "unresolved" };
   }
 
@@ -119,7 +140,11 @@ export async function resolveLocationDetailed(location: string, maxCandidates = 
   let groups: AreaGroup[];
   try {
     groups = await lookupAreaSuggestions(trimmed);
-  } catch {
+  } catch (error) {
+    if (isAbortError(error) || error instanceof WillhabenBlockedError) throw error;
+    // Remember the miss so a handler that still passes `location` without
+    // `area_id` (search.ts) does not hit autocomplete a second time.
+    areaCacheSet(cacheKey, null);
     return { kind: "unresolved" };
   }
 
@@ -135,19 +160,19 @@ export async function resolveLocationDetailed(location: string, maxCandidates = 
   }
 
   if (candidates.length === 0) {
-    areaCache.set(cacheKey, null);
+    areaCacheSet(cacheKey, null);
     return { kind: "unresolved" };
   }
 
   // Exact label match in the highest-priority group wins outright.
   const exact = candidates.find((c) => c.label.toLowerCase() === cacheKey);
   if (exact) {
-    areaCache.set(cacheKey, exact.areaId);
+    areaCacheSet(cacheKey, exact.areaId);
     return { kind: "resolved", areaId: exact.areaId, label: exact.label };
   }
 
   if (candidates.length === 1) {
-    areaCache.set(cacheKey, candidates[0].areaId);
+    areaCacheSet(cacheKey, candidates[0].areaId);
     return { kind: "resolved", areaId: candidates[0].areaId, label: candidates[0].label };
   }
 
@@ -159,7 +184,13 @@ export async function resolveLocationDetailed(location: string, maxCandidates = 
  * resolve instantly without asking again.
  */
 export function rememberLocationChoice(location: string, areaId: string): void {
-  areaCache.set(location.trim().toLowerCase(), areaId);
+  areaCacheSet(location.trim().toLowerCase(), areaId);
+}
+
+/** Test-only: drop session location/suggestion caches. */
+export function clearLocationCaches(): void {
+  areaCache.clear();
+  suggestionCache.clear();
 }
 
 /**
@@ -173,7 +204,7 @@ export async function resolveLocationToAreaId(location: string): Promise<string 
   if (resolution.kind === "resolved") return resolution.areaId;
   if (resolution.kind === "ambiguous") {
     const first = resolution.candidates[0];
-    areaCache.set(location.trim().toLowerCase(), first.areaId);
+    areaCacheSet(location.trim().toLowerCase(), first.areaId);
     return first.areaId;
   }
   return null;
