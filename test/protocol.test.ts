@@ -201,12 +201,22 @@ async function clientSession(): Promise<void> {
       _meta: { progressToken: "deep-1" },
     } as any);
     const deepPayload = deep.structuredContent as any;
+    const deepText = (deep.content as Array<{ type?: string; text?: string }> | undefined)
+      ?.filter((c) => c.type === "text")
+      .map((c) => c.text ?? "")
+      .join("\n");
     assert(deep.isError !== true, "deep search succeeded");
     assert(deepPayload?.ranked_by === "price_per_m2", "real estate defaults to price_per_m2 ranking");
     assert(deepPayload?.scanned_listings === 3, `3 distinct listings scanned (got ${deepPayload?.scanned_listings})`);
     assert(deepPayload?.listings?.[0]?.id === "1230000003", `best €/m² listing ranked first (got ${deepPayload?.listings?.[0]?.id})`);
     assert(deepPayload?.details?.length === 1, "one detail fetched");
+    assert(typeof deepPayload?.details?.[0]?.description === "string" && deepPayload.details[0].description.length > 200, "detail description is the body prose, not a heading");
     assert(progressMessages.length >= 2, `progress notifications received (got ${progressMessages.length})`);
+    assert(deepText.includes("### Details"), "deep-search text includes a Details section");
+    assert(deepText.includes("Sanierungsbedürftige 3-Zimmer-Wohnung"), "deep-search text includes the fetched detail title");
+    assert(deepText.includes("Mustermakler"), "deep-search text includes the seller");
+    assert(/Fernwaerme|Fernwärme|Goesting|Gösting|Besichtigung/.test(deepText), "deep-search text includes description prose");
+    assert(!deepText.includes("structuredContent.details"), "text does not punt details to structuredContent only");
 
     // -- MCP Apps resource ---------------------------------------------------
     section("ui://willhaben/results.html: MCP Apps resource");

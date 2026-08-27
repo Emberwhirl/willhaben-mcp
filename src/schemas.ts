@@ -108,6 +108,12 @@ export const deepSearchResultSchema = z.object({
   ranked_by: z.string(),
   listings: z.array(listingSchema).describe("Top-ranked listings (capped at 20; `scanned_listings` counts everything that fed the ranking)"),
   details: z.array(listingDetailSchema).describe("Full details for the top-ranked listings"),
+  notice: z
+    .string()
+    .optional()
+    .describe(
+      "Set when the scan stopped early because willhaben blocked or timed out; listings and details are whatever was collected before that"
+    ),
 });
 
 // ---------------------------------------------------------------------------
@@ -128,7 +134,7 @@ const priceTo = z.number().optional().describe("Maximum price");
 export const searchInputSchema = z.object({
   vertical: z.enum(["marketplace", "real_estate", "cars", "jobs"]).describe("Which vertical to search"),
   keyword: z.string().optional().describe("Search term/keyword"),
-  category: z.string().optional().describe("Category path (e.g., 'eigentumswohnung/eigentumswohnung-angebote' for real estate)"),
+  category: z.string().max(200).optional().describe("Category path (e.g., 'eigentumswohnung/eigentumswohnung-angebote' for real estate)"),
   location: locationParam,
   price_from: priceFrom,
   price_to: priceTo,
@@ -138,6 +144,7 @@ export const searchInputSchema = z.object({
 });
 
 export const realEstateInputSchema = z.object({
+  keyword: z.string().max(200).optional().describe("Free-text search term (e.g. 'Altbau', 'Balkon', 'Garten')"),
   property_type: z.string().optional().describe("Property type: 'eigentumswohnung' (apartment), 'haus' (house), 'mietwohnung' (rental), 'grundstueck' (land)"),
   action: z.enum(["buy", "rent"]).optional().describe("Buy or rent (default: buy)"),
   location: locationParam,
@@ -152,6 +159,7 @@ export const realEstateInputSchema = z.object({
 });
 
 export const carsInputSchema = z.object({
+  keyword: z.string().max(200).optional().describe("Free-text search term (e.g. 'Kombi', 'Anhängerkupplung')"),
   make: z.string().optional().describe("Car brand (e.g., 'BMW', 'Audi'). Matched as a keyword unless a numeric willhaben make ID is given."),
   model: z.string().optional().describe("Car model (matched as a keyword)"),
   location: locationParam,
@@ -179,7 +187,7 @@ export const jobsInputSchema = z.object({
 
 export const marketplaceInputSchema = z.object({
   keyword: z.string().optional().describe("Search term/keyword"),
-  category: z.string().optional().describe("Category slug including the numeric ID (e.g., 'computer-software-5824'). Use willhaben_get_categories to list valid slugs."),
+  category: z.string().max(200).optional().describe("Category slug including the numeric ID (e.g., 'computer-software-5824'). Use willhaben_get_categories to list valid slugs."),
   condition: z.string().optional().describe("Item condition: 'neu'/'new', 'gebraucht'/'used', or 'defekt'/'defective'"),
   location: locationParam,
   price_from: priceFrom,
@@ -203,7 +211,7 @@ export const getCategoriesInputSchema = z.object({
 export const deepSearchInputSchema = z.object({
   vertical: z.enum(["real_estate", "cars", "marketplace"]).describe("Vertical to deep-search (jobs not supported)"),
   keyword: z.string().optional().describe("Search term/keyword"),
-  category: z.string().optional().describe("Category path/slug (see willhaben_get_categories)"),
+  category: z.string().max(200).optional().describe("Category path/slug (see willhaben_get_categories)"),
   location: locationParam,
   price_from: priceFrom,
   price_to: priceTo,

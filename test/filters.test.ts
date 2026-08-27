@@ -15,6 +15,12 @@ async function main() {
   const rePrice = await searchRealEstate({ rows: 2, price_from: 200000, price_to: 250000 });
   assert("RE price 200-250k", rePrice.total < reAll.total && rePrice.total > 0, `all=${reAll.total} filtered=${rePrice.total}`);
 
+  // `keyword` was exposed on the deep-search schema but missing from the
+  // real-estate and cars tool schemas, so zod stripped it and the tools returned
+  // confident, unfiltered results.
+  const reKeyword = await searchRealEstate({ rows: 2, keyword: "Altbau" });
+  assert("RE keyword=Altbau", reKeyword.total < reAll.total && reKeyword.total > 0, `all=${reAll.total} filtered=${reKeyword.total}`);
+
   const reRooms = await searchRealEstate({ rows: 2, rooms: 3 });
   assert("RE rooms=3", reRooms.total < reAll.total && reRooms.total > 0, `${reRooms.total}`);
 
@@ -39,6 +45,9 @@ async function main() {
 
   const carsBmw = await searchCars({ rows: 2, make: "BMW", price_from: 5000, price_to: 15000 });
   assert("Cars BMW + price 5-15k", carsBmw.total < carsAll.total && carsBmw.total > 0, `all=${carsAll.total} filtered=${carsBmw.total}`);
+
+  const carsKeyword = await searchCars({ rows: 2, keyword: "Anhängerkupplung" });
+  assert("Cars keyword=Anhängerkupplung", carsKeyword.total < carsAll.total && carsKeyword.total > 0, `all=${carsAll.total} filtered=${carsKeyword.total}`);
 
   const carsElec = await searchCars({ rows: 2, fuel_type: "electric", transmission: "automatic" });
   assert("Cars electric+automatic", carsElec.total < carsAll.total && carsElec.total > 0, `${carsElec.total}`);

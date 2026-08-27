@@ -13,9 +13,12 @@
     "dev": "node scripts/build-ui.mjs && tsx src/index.ts",
     "start": "node dist/index.js",
     "check": "node scripts/build-ui.mjs && tsc --noEmit --noUnusedLocals --noUnusedParameters",
-    "test": "tsx test/integration.test.ts && tsx test/filters.test.ts",
+    "test": "npm run build && npm run test:parse && npm run test:protocol && npm run test:rate-limit",
+    "test:parse": "tsx test/parse.test.ts",
     "test:protocol": "tsx test/protocol.test.ts && tsx test/legacy-compat.test.ts",
     "test:rate-limit": "tsx test/rate-limit.test.ts",
+    "test:live": "npm run test:integration && npm run test:filters",
+    "test:integration": "tsx test/integration.test.ts",
     "test:filters": "tsx test/filters.test.ts",
     "test:categories": "tsx test/categories.test.ts"
   },
@@ -24,7 +27,7 @@
   "license": "MIT",
   "files": ["dist", "README.md", "LICENSE", "DISCLAIMER.md"],
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.3.0"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",

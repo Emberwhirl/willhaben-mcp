@@ -10,12 +10,23 @@
 // Dispatch is the only network slot: one in-flight willhaben request at a time,
 // at least 1s between starts unless fixtures/test-handler are substituting HTTP,
 // and Retry-After backoff is observed after the previous fetch has settled.
-// Redirects are followed only onto allowlisted willhaben hosts, inside that
-// same slot (needed for `/iad/object?adId=` → canonical listing URL).
+// Redirects are followed only onto allowlisted willhaben hosts (needed for
+// `/iad/object?adId=` → canonical listing URL), and *every hop takes its own
+// dispatch slot*: hops used to run inside one slot, so a 302 pair fired 0-2ms
+// apart and quietly doubled the real request rate against the documented 1/s.
 //
-// A 429 (and a 403 that carries a usable Retry-After) records a process-wide
-// backoff and throws `WillhabenBlockedError`. A 403 without Retry-After is a
-// normal non-OK response so callers can skip that listing without freezing.
+// Every hop is additionally bounded by `FETCH_TIMEOUT_MS`. Without it, a socket
+// that connects and never answers holds the single dispatch slot for undici's
+// 300s default and freezes every willhaben tool call. A timeout surfaces as
+// `WillhabenTimeoutError`, which is deliberately *not* an AbortError: the server
+// rethrows AbortErrors as real client cancellations (returning nothing), so a
+// timeout must take the ordinary error path and produce a readable message.
+//
+// A 429 or a 403 records a process-wide backoff and throws
+// `WillhabenBlockedError`. Consecutive blocks escalate (exponential + jitter),
+// so a bare 403/429 — the standard WAF shape, no Retry-After — costs more each
+// time instead of nothing; an explicit Retry-After acts as a floor, and any
+// non-error response resets the escalation.
 // The MCP request AbortSignal is honored on in-flight work (native `fetch`
 // and substituted handlers) so cancellation does not leave willhaben requests
 // running.
@@ -61,10 +72,50 @@ export interface HttpRawResult {
 
 export type HttpTestHandler = (url: string, init: { signal?: AbortSignal }) => Promise<HttpRawResult>;
 
-/** Default backoff when 429/403 carries no usable Retry-After (matches 1 req/s). */
+/**
+ * Test-only knobs. Every field is optional and unset by default, so callers that
+ * pass only a handler keep the previous behaviour exactly.
+ */
+export interface HttpTestOptions {
+  /**
+   * Keep dispatch pacing switched on while a test handler is installed, scaled
+   * down to this many ms between request starts. Substituted HTTP otherwise
+   * paces at 0ms — which is why the real interval (and redirect pacing) was
+   * never actually exercised by the offline suite.
+   */
+  minIntervalMs?: number;
+  /** Scale down `FETCH_TIMEOUT_MS` so a hung request can be tested in ms. */
+  timeoutMs?: number;
+  /** Scale down `BLOCK_BACKOFF_BASE_MS` so escalation can be tested in ms. */
+  blockBackoffBaseMs?: number;
+}
+
+/**
+ * Fallback used by `parseRetryAfter` when a header is absent or unparseable.
+ * A block with no usable Retry-After no longer costs this — it costs the
+ * escalating `BLOCK_BACKOFF_BASE_MS` floor, because 1000ms is exactly the normal
+ * interval and so was free.
+ */
 export const DEFAULT_RETRY_AFTER_MS = 1000;
 /** Cap so a huge Retry-After cannot freeze the MCP server for an hour. */
 export const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * Per-hop budget for a single willhaben request. The dispatch slot is a mutex,
+ * so an unbounded fetch is a process-wide freeze, not one slow tool call.
+ */
+export const FETCH_TIMEOUT_MS = 15_000;
+
+/**
+ * First cooldown after a block that carries no usable Retry-After. Deliberately
+ * above the 1 req/s interval so a bare 403/429 is not free, then doubled per
+ * consecutive block (2s, 4s, 8s, 16s, 32s, then capped by MAX_RETRY_AFTER_MS).
+ */
+export const BLOCK_BACKOFF_BASE_MS = 2000;
+/** Doublings applied to the base before the cap takes over. */
+export const BLOCK_BACKOFF_MAX_STEPS = 5;
+/** Up to +25% random jitter so parallel clients do not resynchronise on the wall. */
+export const BLOCK_BACKOFF_JITTER = 0.25;
 
 const ALLOWED_HOSTS = new Set(["www.willhaben.at", "willhaben.at", "publicapi.willhaben.at"]);
 const MAX_REDIRECTS = 5;
@@ -76,7 +127,9 @@ const abortStore = new AsyncLocalStorage<AbortSignal>();
 
 let fixtureRoutes: FixtureRoute[] | undefined;
 let testHandler: HttpTestHandler | undefined;
+let testOptions: HttpTestOptions = {};
 let blockedUntil = 0;
+let consecutiveBlocks = 0;
 let lastStart = 0;
 let rateLimitChain: Promise<unknown> = Promise.resolve();
 
@@ -146,19 +199,45 @@ export class WillhabenBlockedError extends Error {
   }
 }
 
+/**
+ * A willhaben hop exceeded its budget. Intentionally **not** an AbortError:
+ * `server.ts` rethrows AbortErrors as MCP cancellations (the client gets no
+ * result at all), so a timeout reported that way would vanish silently. As an
+ * ordinary Error it becomes a legible `isError` tool result.
+ */
+export class WillhabenTimeoutError extends Error {
+  readonly url: string;
+  readonly timeoutMs: number;
+
+  constructor(url: string, timeoutMs: number) {
+    super(`willhaben did not respond within ${Math.round(timeoutMs / 100) / 10}s for ${url}`);
+    this.name = "WillhabenTimeoutError";
+    this.url = url;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/** `AbortSignal.timeout()` aborts with a `TimeoutError` DOMException, not an AbortError. */
+function isTimeoutReason(error: unknown): boolean {
+  return error instanceof Error && error.name === "TimeoutError";
+}
+
+/** Retry-After as milliseconds, uncapped; `undefined` when unparseable. */
+function retryAfterRawMs(header: string, now: number): number | undefined {
+  const trimmed = header.trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const date = Date.parse(trimmed);
+  if (!Number.isNaN(date)) return Math.max(0, date - now);
+  return undefined;
+}
+
 /** Parse a Retry-After header (delta-seconds or HTTP date) into a capped millisecond delay. */
 export function parseRetryAfter(header: string | null | undefined, now = Date.now()): number {
   if (header == null || header.trim() === "") return DEFAULT_RETRY_AFTER_MS;
-  const trimmed = header.trim();
-  const seconds = Number(trimmed);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.min(Math.ceil(seconds * 1000), MAX_RETRY_AFTER_MS);
-  }
-  const date = Date.parse(trimmed);
-  if (!Number.isNaN(date)) {
-    return Math.min(Math.max(0, date - now), MAX_RETRY_AFTER_MS);
-  }
-  return DEFAULT_RETRY_AFTER_MS;
+  const raw = retryAfterRawMs(header, now);
+  if (raw === undefined) return DEFAULT_RETRY_AFTER_MS;
+  return Math.min(raw, MAX_RETRY_AFTER_MS);
 }
 
 export function noteWillhabenBackoff(retryAfterMs: number): void {
@@ -170,23 +249,58 @@ export function getBackoffRemainingMs(): number {
   return Math.max(0, blockedUntil - Date.now());
 }
 
+/** Blocks seen back-to-back without an intervening non-error response. */
+export function getConsecutiveBlockCount(): number {
+  return consecutiveBlocks;
+}
+
+function blockBackoffBaseMs(): number {
+  return testOptions.blockBackoffBaseMs ?? BLOCK_BACKOFF_BASE_MS;
+}
+
+/**
+ * Count a block and return the cooldown to observe: an escalating, jittered
+ * floor (so a header-less bot wall is not free and repeated hits back off
+ * progressively), raised to an explicit Retry-After whenever willhaben sent one.
+ * Only reached on 403/429, so the unblocked path is never slowed by this.
+ */
+function registerBlock(explicitMs: number | undefined): number {
+  consecutiveBlocks++;
+  const step = Math.min(consecutiveBlocks - 1, BLOCK_BACKOFF_MAX_STEPS);
+  const escalated = blockBackoffBaseMs() * 2 ** step;
+  const jittered = Math.round(escalated * (1 + Math.random() * BLOCK_BACKOFF_JITTER));
+  const floor = Math.min(jittered, MAX_RETRY_AFTER_MS);
+  const retryAfterMs = Math.max(explicitMs ?? 0, floor);
+  noteWillhabenBackoff(retryAfterMs);
+  return retryAfterMs;
+}
+
 /** True when live willhaben is not in use (fixtures or an injected test handler). */
 export function isSubstitutedHttp(): boolean {
   return testHandler !== undefined || Boolean(process.env.WILLHABEN_MCP_FIXTURES);
 }
 
-export function setHttpTestHandler(handler: HttpTestHandler | undefined): void {
+/**
+ * Install (or clear) the injected dispatcher used by the offline suites.
+ * `options` lets a test keep pacing/timeout/backoff behaviour switched on at a
+ * scaled-down magnitude; omitting it reproduces the previous behaviour (pacing
+ * off, production timeout and block base).
+ */
+export function setHttpTestHandler(handler: HttpTestHandler | undefined, options?: HttpTestOptions): void {
   testHandler = handler;
+  testOptions = handler ? options ?? {} : {};
 }
 
 /** Test-only: drop queued spacing so a suite can start from a clean slot. */
 export function resetRateLimiterForTests(): void {
   lastStart = 0;
+  consecutiveBlocks = 0;
   rateLimitChain = Promise.resolve();
 }
 
 export function resetHttpClientForTests(): void {
   testHandler = undefined;
+  testOptions = {};
   fixtureRoutes = undefined;
   blockedUntil = 0;
   resetRateLimiterForTests();
@@ -231,21 +345,31 @@ function usableRetryAfter(headers: Record<string, string> | undefined): string |
   return value;
 }
 
+function explicitRetryAfterMs(headers: Record<string, string> | undefined, url: string): number | undefined {
+  const header = usableRetryAfter(headers);
+  if (header === undefined) return undefined;
+  const raw = retryAfterRawMs(header, Date.now());
+  if (raw === undefined) return undefined;
+  if (raw > MAX_RETRY_AFTER_MS) {
+    // Truncating this silently used to hide "come back in an hour" behind a
+    // 60s cooldown; say so instead of pretending the block is short.
+    console.error(
+      `[willhaben-mcp] willhaben asked for Retry-After ${Math.round(raw / 1000)}s on ${url}; ` +
+        `capping the cooldown at ${MAX_RETRY_AFTER_MS / 1000}s — expect further blocks`
+    );
+  }
+  return Math.min(raw, MAX_RETRY_AFTER_MS);
+}
+
 function finalizeHttpResult(url: string, raw: HttpRawResult): HttpTextResult {
   const status = raw.status;
-  if (status === 429) {
-    const retryAfterMs = parseRetryAfter(headerValue(raw.headers, "retry-after"));
-    noteWillhabenBackoff(retryAfterMs);
+  // A bare 403 (no Retry-After) is the standard WAF shape. Treating it as a
+  // normal error let deep search walk into the wall once per remaining listing.
+  if (status === 429 || status === 403) {
+    const retryAfterMs = registerBlock(explicitRetryAfterMs(raw.headers, url));
     throw new WillhabenBlockedError(status, retryAfterMs, url);
   }
-  if (status === 403) {
-    const retryAfterHeader = usableRetryAfter(raw.headers);
-    if (retryAfterHeader !== undefined) {
-      const retryAfterMs = parseRetryAfter(retryAfterHeader);
-      noteWillhabenBackoff(retryAfterMs);
-      throw new WillhabenBlockedError(status, retryAfterMs, url);
-    }
-  }
+  if (status < 400) consecutiveBlocks = 0;
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -317,56 +441,155 @@ function assertBodySize(body: string): void {
   }
 }
 
-function rawFromResponse(response: Response, body: string): HttpRawResult {
+function rawFromResponse(response: Response, body: string, location?: string): HttpRawResult {
   assertBodySize(body);
   return {
     status: response.status,
     statusText: response.statusText,
     body,
-    headers: { "retry-after": response.headers.get("retry-after") ?? "" },
+    headers: {
+      "retry-after": response.headers.get("retry-after") ?? "",
+      ...(location !== undefined ? { location } : {}),
+    },
   };
 }
 
-/** Live fetch with willhaben-only redirect following (max 5 hops). */
-async function fetchWillhaben(url: string, accept: string, json: boolean, signal?: AbortSignal): Promise<HttpRawResult> {
+function isFollowableLocation(location: string, base: string): boolean {
+  try {
+    resolveWillhabenUrl(location, base);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** One live hop. Redirect following lives in `fetchWithRedirects`. */
+async function fetchOnce(url: string, accept: string, json: boolean, signal: AbortSignal): Promise<HttpRawResult> {
+  const response = await fetch(url, {
+    signal,
+    redirect: "manual",
+    headers: requestHeaders(accept, json),
+  });
+
+  const location = response.headers.get("location");
+  if (isRedirectStatus(response.status) && location && isFollowableLocation(location, url)) {
+    // Don't download a page we are about to leave; cancelling releases the socket.
+    await cancelBody(response);
+    return rawFromResponse(response, "", location);
+  }
+
+  const body = await response.text();
+  return rawFromResponse(response, body, location ?? undefined);
+}
+
+function fetchTimeoutMs(): number {
+  return testOptions.timeoutMs ?? FETCH_TIMEOUT_MS;
+}
+
+/**
+ * Run one hop under `signal` **and** a fresh timeout, keeping the two apart in
+ * the failure path: a caller cancel stays an AbortError (the server turns that
+ * into a real MCP cancellation), a timeout becomes a `WillhabenTimeoutError`.
+ * `AbortSignal.any` propagates the timeout's `TimeoutError` reason, so without
+ * this split a 15s hang would look exactly like a client hanging up.
+ */
+async function withHopTimeout<T>(
+  url: string,
+  callerSignal: AbortSignal | undefined,
+  run: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const budget = fetchTimeoutMs();
+  const timeout = AbortSignal.timeout(budget);
+  const composed = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
+  try {
+    return await run(composed);
+  } catch (error) {
+    if (callerSignal?.aborted) throw abortError(callerSignal);
+    if (timeout.aborted || isTimeoutReason(error)) throw new WillhabenTimeoutError(url, budget);
+    throw error;
+  }
+}
+
+/** One hop through whichever transport is active: test handler, fixture, or live fetch. */
+async function transportHop(url: string, accept: string, json: boolean, signal?: AbortSignal): Promise<HttpRawResult> {
+  const handler = testHandler;
+  if (handler) {
+    const raw = await withHopTimeout(url, signal, (s) => handler(url, { signal: s }));
+    assertBodySize(raw.body);
+    return raw;
+  }
+
+  const fixture = await loadFixture(url);
+  if (fixture) {
+    throwIfAborted(signal);
+    assertBodySize(fixture.body);
+    return fixture;
+  }
+
+  return withHopTimeout(url, signal, (s) => fetchOnce(url, accept, json, s));
+}
+
+/**
+ * Follow willhaben-only redirects (max 5 hops), pacing every extra hop.
+ *
+ * The caller is already inside `enqueue`, and `waitForDispatchSlot` only sleeps
+ * on the dispatch interval — it never touches `rateLimitChain` — so re-entering
+ * it here paces the hops without deadlocking the in-flight task. Aborts and the
+ * per-hop timeout still cut through, because the wait is an abortable `sleep`.
+ * Process-wide 403/429 backoff is waited *outside* the mutex (see `dispatch`).
+ */
+async function fetchWithRedirects(
+  url: string,
+  accept: string,
+  json: boolean,
+  signal?: AbortSignal
+): Promise<{ url: string; raw: HttpRawResult }> {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     throwIfAborted(signal);
-    const response = await fetch(current, {
-      signal,
-      redirect: "manual",
-      headers: requestHeaders(accept, json),
-    });
+    // Hop 0 was paced by dispatch() already — waiting again would halve the rate.
+    if (hop > 0) await waitForDispatchSlot(signal);
 
-    if (isRedirectStatus(response.status) && hop < MAX_REDIRECTS) {
-      const location = response.headers.get("location");
-      if (location) {
-        try {
-          const next = resolveWillhabenUrl(location, current);
-          await cancelBody(response);
-          current = next;
-          continue;
-        } catch {
-          // Off-host Location: do not follow (SSRF). Return the 3xx as-is.
-        }
-      }
+    const raw = await transportHop(current, accept, json, signal);
+    if (!isRedirectStatus(raw.status) || hop === MAX_REDIRECTS) return { url: current, raw };
+
+    const location = headerValue(raw.headers, "location");
+    if (!location) return { url: current, raw };
+    try {
+      current = resolveWillhabenUrl(location, current);
+    } catch {
+      // Off-host Location: do not follow (SSRF). Return the 3xx as-is.
+      return { url: current, raw };
     }
-
-    const body = await response.text();
-    return rawFromResponse(response, body);
   }
   throw new Error(`Too many redirects for ${url}`);
 }
 
+/** Spacing between request starts; 0 disables pacing (fixtures / plain test handler). */
+function dispatchIntervalMs(): number {
+  if (!isSubstitutedHttp()) return MIN_INTERVAL_MS;
+  return testOptions.minIntervalMs ?? 0;
+}
+
 async function waitForDispatchSlot(abort?: AbortSignal): Promise<void> {
+  const interval = dispatchIntervalMs();
   while (true) {
     throwIfAborted(abort);
-    const spacing = isSubstitutedHttp() ? 0 : lastStart + MIN_INTERVAL_MS - Date.now();
-    const wait = Math.max(getBackoffRemainingMs(), spacing, 0);
+    const spacing = interval > 0 ? lastStart + interval - Date.now() : 0;
+    const wait = Math.max(spacing, 0);
     if (wait === 0) break;
     await sleep(wait, abort);
   }
   lastStart = Date.now();
+}
+
+async function waitForBlockBackoff(signal?: AbortSignal): Promise<void> {
+  const remaining = getBackoffRemainingMs();
+  if (remaining <= 0) return;
+  console.error(
+    `[willhaben-mcp] waiting ${Math.round(remaining / 100) / 10}s before the next willhaben request (403/429 backoff)`
+  );
+  await sleep(remaining, signal);
 }
 
 function enqueue<T>(work: () => Promise<T>): Promise<T> {
@@ -377,20 +600,8 @@ function enqueue<T>(work: () => Promise<T>): Promise<T> {
 }
 
 async function performFetch(url: string, accept: string, json: boolean, signal?: AbortSignal): Promise<HttpTextResult> {
-  if (testHandler) {
-    const raw = await testHandler(url, { signal });
-    assertBodySize(raw.body);
-    return finalizeHttpResult(url, raw);
-  }
-
-  const fixture = await loadFixture(url);
-  if (fixture) {
-    throwIfAborted(signal);
-    assertBodySize(fixture.body);
-    return finalizeHttpResult(url, fixture);
-  }
-
-  return finalizeHttpResult(url, await fetchWillhaben(url, accept, json, signal));
+  const { url: finalUrl, raw } = await fetchWithRedirects(url, accept, json, signal);
+  return finalizeHttpResult(finalUrl, raw);
 }
 
 async function dispatch(url: string, accept: string, json: boolean, options?: HttpRequestOptions): Promise<HttpTextResult> {
@@ -399,22 +610,25 @@ async function dispatch(url: string, accept: string, json: boolean, options?: Ht
   const signal = getAbortSignal(options?.signal);
   throwIfAborted(signal);
 
-  return enqueue(async () => {
-    await waitForDispatchSlot(signal);
-    return performFetch(resolved, accept, json, signal);
-  });
-}
+  // 403/429 cooldown is process-wide and can last up to 60s. Sleep it *before*
+  // taking the dispatch mutex so a waiting caller is abortable independently
+  // and stderr is the user-visible signal (MCP progress only exists mid-tool).
+  for (;;) {
+    throwIfAborted(signal);
+    if (getBackoffRemainingMs() > 0) {
+      await waitForBlockBackoff(signal);
+      continue;
+    }
 
-/**
- * Compatibility wrapper: acquire the dispatch slot and release it without
- * fetching. Callers should not use this — `httpText`/`httpJson` already own
- * the slot. Kept so existing imports keep type-checking.
- */
-export function rateLimit(signal?: AbortSignal): Promise<void> {
-  const abort = getAbortSignal(signal);
-  return enqueue(async () => {
-    await waitForDispatchSlot(abort);
-  });
+    const outcome = await enqueue(async (): Promise<{ kind: "backoff" } | { kind: "ok"; result: HttpTextResult }> => {
+      if (getBackoffRemainingMs() > 0) return { kind: "backoff" };
+      await waitForDispatchSlot(signal);
+      const result = await performFetch(resolved, accept, json, signal);
+      return { kind: "ok", result };
+    });
+
+    if (outcome.kind === "ok") return outcome.result;
+  }
 }
 
 /** Fetch a URL as text (HTML pages). Honors the fixture harness when active. */

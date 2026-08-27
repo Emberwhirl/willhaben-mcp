@@ -18,7 +18,7 @@
 // silently guessing.
 
 import { WILLHABEN_BASE_URL, resolveAreaId } from "../utils/constants.js";
-import { httpJson, isAbortError, WillhabenBlockedError } from "./httpClient.js";
+import { httpJson, isAbortError, WillhabenBlockedError, WillhabenTimeoutError } from "./httpClient.js";
 
 export interface AreaEntry {
   areaId: number;
@@ -141,9 +141,16 @@ export async function resolveLocationDetailed(location: string, maxCandidates = 
   try {
     groups = await lookupAreaSuggestions(trimmed);
   } catch (error) {
-    if (isAbortError(error) || error instanceof WillhabenBlockedError) throw error;
-    // Remember the miss so a handler that still passes `location` without
-    // `area_id` (search.ts) does not hit autocomplete a second time.
+    if (
+      isAbortError(error) ||
+      error instanceof WillhabenBlockedError ||
+      error instanceof WillhabenTimeoutError
+    ) {
+      throw error;
+    }
+    // Remember a genuine miss so a handler that still passes `location` without
+    // `area_id` (search.ts) does not hit autocomplete a second time. Timeouts
+    // and blocks are not misses — they must not be negative-cached.
     areaCacheSet(cacheKey, null);
     return { kind: "unresolved" };
   }

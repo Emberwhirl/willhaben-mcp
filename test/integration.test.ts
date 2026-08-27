@@ -1,18 +1,24 @@
 // Integration test for willhaben MCP - tests actual API calls
-import { scrapeSearchResults, extractNextData } from "../src/api/scraper.js";
+import { scrapeSearchResults } from "../src/api/scraper.js";
 import { searchListings, searchRealEstate, searchCars, searchMarketplace } from "../src/api/search.js";
 import { searchJobs } from "../src/api/jobs.js";
 import { getListingDetail } from "../src/api/detail.js";
+
+// This suite used to print ❌ for every failed check and still exit 0, so a CI
+// job running it stayed green while the scraper was completely broken. Every
+// failure now lands in `failures`, and the process exits non-zero if any did.
+const failures: string[] = [];
+
+function fail(message: string): void {
+  failures.push(message);
+  console.log(message);
+}
 
 async function testSearch(urlPath: string, description: string) {
   console.log(`\n--- Testing: ${description} ---`);
   console.log(`URL: ${urlPath}`);
   try {
     const { result, isInitial } = await scrapeSearchResults(urlPath);
-    if (!result) {
-      console.log("❌ No search result found");
-      return false;
-    }
     console.log(`✅ Found ${result.rowsFound} results (${result.rowsReturned} returned)`);
     console.log(`   Description: ${result.description}`);
     console.log(`   Vertical: ${result.verticalId}`);
@@ -26,7 +32,7 @@ async function testSearch(urlPath: string, description: string) {
     }
     return true;
   } catch (error) {
-    console.log(`❌ Error: ${error instanceof Error ? error.message : String(error)}`);
+    fail(`❌ Error: ${error instanceof Error ? error.message : String(error)}`);
     return false;
   }
 }
@@ -53,7 +59,7 @@ async function main() {
       console.log(`   - ${job.title} | Location: ${job.location ?? "N/A"} | URL: ${job.url}`);
     }
   } catch (error) {
-    console.log(`❌ Jobs API Error: ${error instanceof Error ? error.message : String(error)}`);
+    fail(`❌ Jobs API Error: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   // Test 5: Real Estate search
@@ -70,7 +76,7 @@ async function main() {
       console.log(`   - ${listing.title} | Price: ${listing.price ?? "N/A"} | Location: ${listing.location ?? "N/A"}`);
     }
   } catch (error) {
-    console.log(`❌ Real Estate Error: ${error instanceof Error ? error.message : String(error)}`);
+    fail(`❌ Real Estate Error: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   // Test 6: Car search
@@ -82,7 +88,7 @@ async function main() {
       console.log(`   - ${listing.title} | Price: ${listing.price ?? "N/A"} | Location: ${listing.location ?? "N/A"}`);
     }
   } catch (error) {
-    console.log(`❌ Car search Error: ${error instanceof Error ? error.message : String(error)}`);
+    fail(`❌ Car search Error: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   // Test 7: Detail page (uses an ad id observed live in Test 5)
@@ -100,15 +106,31 @@ async function main() {
         console.log(`   Images: ${detail.images.length}`);
         console.log(`   Vertical: ${detail.vertical}`);
       } else {
-        console.log("❌ No detail found");
+        fail("❌ No detail found");
       }
     } catch (error) {
-      console.log(`❌ Detail Error: ${error instanceof Error ? error.message : String(error)}`);
+      fail(`❌ Detail Error: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   console.log("\n=====================================");
-  console.log("🧪 Testing complete!");
+  if (failures.length > 0) {
+    console.log(`🧪 Testing complete — ${failures.length} check(s) FAILED:`);
+    for (const failure of failures) {
+      console.log(`   ${failure}`);
+    }
+    console.log(
+      "\nThis suite hits live willhaben, so a failure can also mean a blocked IP\n" +
+        "or markup drift rather than a code regression — check before assuming a bug."
+    );
+    process.exitCode = 1;
+    return;
+  }
+  console.log("🧪 Testing complete — all checks passed.");
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  // Catching to console.error alone would also have exited 0.
+  console.error(error);
+  process.exitCode = 1;
+});

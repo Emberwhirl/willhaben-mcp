@@ -25,18 +25,33 @@ function buildQuery(params: Record<string, string>, exclude: string[] = ["catego
 const CATEGORY_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 /**
+ * Defensive bound mirroring `.max(200)` on the `category` zod fields in `schemas.ts`.
+ * This function is exported and reachable from callers that never went through zod,
+ * so it rejects absurd input up front rather than trusting the schema layer.
+ * The longest real willhaben slug is ~51 chars.
+ */
+const MAX_CATEGORY_PATH_LENGTH = 200;
+
+/**
  * Category is interpolated into the URL path. Only `[A-Za-z0-9_-]` segments
  * joined by a single `/` are allowed, so `?` / `..` / `//` cannot inject a
  * query string or escape the vertical prefix (and the 100-row cap).
  * Empty category is allowed (unfiltered marketplace).
+ *
+ * Every check here is linear in input length. A scheme check
+ * (`/[a-zA-Z][a-zA-Z0-9+.-]*:/`) used to live alongside the ones below; it was
+ * quadratic on long inputs (200k chars = ~17s of blocked event loop) and fully
+ * redundant, since `CATEGORY_SEGMENT_RE` is anchored and permits neither `:`
+ * nor `+` nor `.`, so any scheme-shaped input is rejected by the segment loop
+ * with the identical error. Do not reintroduce an unanchored scan here.
  */
 export function sanitizeCategoryPath(category: string | undefined): string {
   if (category == null || category === "") return "";
   if (
+    category.length > MAX_CATEGORY_PATH_LENGTH ||
     category.includes("..") ||
     category.includes("//") ||
-    /[?#\\]/.test(category) ||
-    /[a-zA-Z][a-zA-Z0-9+.-]*:/.test(category)
+    /[?#\\]/.test(category)
   ) {
     throw new Error("Invalid category path");
   }

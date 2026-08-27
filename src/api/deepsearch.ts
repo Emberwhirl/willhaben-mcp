@@ -4,6 +4,8 @@
 //
 // Work is strictly bounded (≤ 3 pages + ≤ 8 details ≈ ≤ 11 polite requests at
 // the built-in 1 req/s limit) so a call finishes well within client timeouts.
+// Details use the listing's canonical SEO path (one hop). Fetching by ad id
+// still 308s onto that path and costs two slots — deep search does not do that.
 // Progress is reported through an optional callback which the MCP layer maps
 // to `notifications/progress`, and the whole run honors an AbortSignal so a
 // cancelled request stops hitting willhaben immediately.
@@ -13,9 +15,15 @@
 // server SDK, this is the natural candidate to return a task handle instead.
 
 import { searchCars, searchMarketplace, searchRealEstate } from "./search.js";
-import { getListingDetail } from "./detail.js";
+import { getListingDetailFor } from "./detail.js";
 import type { SimplifiedListing, SimplifiedListingDetail } from "./types.js";
-import { isAbortError, runWithAbortSignal, throwIfAborted, WillhabenBlockedError } from "./httpClient.js";
+import {
+  isAbortError,
+  runWithAbortSignal,
+  throwIfAborted,
+  WillhabenBlockedError,
+  WillhabenTimeoutError,
+} from "./httpClient.js";
 
 export interface DeepSearchInput {
   vertical: "real_estate" | "cars" | "marketplace";
@@ -57,12 +65,17 @@ export interface DeepSearchResult {
   ranked_by: string;
   listings: SimplifiedListing[];
   details: SimplifiedListingDetail[];
+  /** Set when a block/timeout stopped the scan; listings/details are partial. */
+  notice?: string;
 }
 
 export type ProgressReporter = (progress: number, total: number, message: string) => void | Promise<void>;
 
 export const DEEP_SEARCH_MAX_PAGES = 3;
 export const DEEP_SEARCH_MAX_DETAILS = 8;
+/** Defaults applied when the caller passes neither field — advertised in the tool description. */
+export const DEEP_SEARCH_DEFAULT_PAGES = 2;
+export const DEEP_SEARCH_DEFAULT_DETAILS = 5;
 const DEEP_SEARCH_ROWS = 30;
 /**
  * How many ranked listings the result carries. Everything scanned still feeds
@@ -113,6 +126,23 @@ function rank(listings: SimplifiedListing[], rankBy: string): SimplifiedListing[
 
 function checkAborted(signal: AbortSignal | undefined): void {
   throwIfAborted(signal);
+}
+
+function earlyStopNotice(error: WillhabenBlockedError | WillhabenTimeoutError, phase: string): string {
+  if (error instanceof WillhabenBlockedError) {
+    return (
+      `Stopped during ${phase}: willhaben returned ${error.status} and asked us to back off ` +
+      `${error.retryAfterMs}ms. Returning listings and details collected before the block.`
+    );
+  }
+  return (
+    `Stopped during ${phase}: willhaben did not respond in time. ` +
+    `Returning listings and details collected before the timeout.`
+  );
+}
+
+function isStopAndKeep(error: unknown): error is WillhabenBlockedError | WillhabenTimeoutError {
+  return error instanceof WillhabenBlockedError || error instanceof WillhabenTimeoutError;
 }
 
 function searchDeepPage(input: DeepSearchInput, page: number) {
@@ -175,8 +205,8 @@ async function deepSearchBody(
   options: { signal?: AbortSignal; onProgress?: ProgressReporter }
 ): Promise<DeepSearchResult> {
   const { signal, onProgress } = options;
-  const pages = Math.min(Math.max(input.pages ?? 2, 1), DEEP_SEARCH_MAX_PAGES);
-  const detailLimit = Math.min(Math.max(input.detail_limit ?? 5, 0), DEEP_SEARCH_MAX_DETAILS);
+  const pages = Math.min(Math.max(input.pages ?? DEEP_SEARCH_DEFAULT_PAGES, 1), DEEP_SEARCH_MAX_PAGES);
+  const detailLimit = Math.min(Math.max(input.detail_limit ?? DEEP_SEARCH_DEFAULT_DETAILS, 0), DEEP_SEARCH_MAX_DETAILS);
   const rankBy = input.rank_by ?? (input.vertical === "real_estate" ? "price_per_m2" : "price_asc");
 
   // MCP progress `total` must stay stable for the whole run (do not shrink
@@ -193,30 +223,42 @@ async function deepSearchBody(
   let total = 0;
   let description: string | undefined;
   let scannedPages = 0;
+  let notice: string | undefined;
 
   for (let pageNo = 1; pageNo <= pages; pageNo++) {
     checkAborted(signal);
-    const result = await searchDeepPage(input, pageNo);
-    scannedPages = pageNo;
-    total = result.total;
-    description = description ?? result.description;
-    for (const listing of result.listings) {
-      if (!collected.has(listing.id)) collected.set(listing.id, listing);
+    try {
+      const result = await searchDeepPage(input, pageNo);
+      scannedPages = pageNo;
+      total = result.total;
+      description = description ?? result.description;
+      for (const listing of result.listings) {
+        if (!collected.has(listing.id)) collected.set(listing.id, listing);
+      }
+      await report(`Scanned page ${pageNo}/${pages} — ${collected.size} distinct listings so far`);
+      // Stop early when the site has no further pages.
+      if (result.listings.length < DEEP_SEARCH_ROWS) break;
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      if (isStopAndKeep(error) && collected.size > 0) {
+        notice = earlyStopNotice(error, "page scan");
+        await report(notice);
+        break;
+      }
+      throw error;
     }
-    await report(`Scanned page ${pageNo}/${pages} — ${collected.size} distinct listings so far`);
-    // Stop early when the site has no further pages.
-    if (result.listings.length < DEEP_SEARCH_ROWS) break;
   }
 
   const ranked = rank([...collected.values()], rankBy);
 
-  // Phase 2: pull details for the top-ranked listings.
-  const detailTargets = ranked.slice(0, detailLimit);
+  // Phase 2: pull details for the top-ranked listings. Skip when the page
+  // scan already hit a block/timeout — further hops would walk into the same wall.
+  const detailTargets = notice ? [] : ranked.slice(0, detailLimit);
   const details: SimplifiedListingDetail[] = [];
   for (const listing of detailTargets) {
     checkAborted(signal);
     try {
-      const detail = await getListingDetail(listing.id);
+      const detail = await getListingDetailFor(listing);
       if (detail) {
         details.push(detail);
         await report(`Fetched details ${details.length}/${detailTargets.length}: ${listing.title.slice(0, 60)}`);
@@ -224,7 +266,12 @@ async function deepSearchBody(
         await report(`Skipped listing ${listing.id} (no longer available)`);
       }
     } catch (error) {
-      if (isAbortError(error) || error instanceof WillhabenBlockedError) throw error;
+      if (isAbortError(error)) throw error;
+      if (isStopAndKeep(error)) {
+        notice = earlyStopNotice(error, "detail fetch");
+        await report(notice);
+        break;
+      }
       await report(`Skipped listing ${listing.id} (detail fetch failed)`);
     }
   }
@@ -238,5 +285,6 @@ async function deepSearchBody(
     ranked_by: rankBy,
     listings: ranked.slice(0, DEEP_SEARCH_LISTINGS_CAP),
     details,
+    ...(notice !== undefined ? { notice } : {}),
   };
 }

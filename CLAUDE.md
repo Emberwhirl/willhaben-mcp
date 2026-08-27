@@ -8,7 +8,7 @@ legal posture lives in `DISCLAIMER.md` (do not weaken either — see Invariants)
 An MCP server (`@modelcontextprotocol/server` v2, **MCP spec 2026-07-28** + legacy era via
 `serveStdio`) that searches willhaben.at by scraping the `__NEXT_DATA__` JSON embedded in public
 pages, plus the public `publicapi.willhaben.at` (jobs) and `/webapi/autocomplete/area` (location).
-No auth, no API keys, no reverse-engineered tokens. TypeScript, ESM, Node ≥ 20, zod v4.
+No auth, no API keys, no reverse-engineered tokens. TypeScript, ESM, Node ≥ 20.3, zod v4.
 
 Protocol features in use: tool annotations + titles, `outputSchema`/`structuredContent` on every tool, cache
 hints (SEP-2549), multi-round-trip location elicitation (ambiguous places ask the user; SDK shim
@@ -19,21 +19,30 @@ covers 2025-era clients), an MCP Apps results gallery (`ui://willhaben/results.h
 
 ```bash
 npm install
-npm run build                      # build-ui (esbuild → generated HTML module) + tsup → dist/
-npm run dev                        # build-ui + tsx src/index.ts
-npm run check                      # build-ui + strict tsc (generated module must exist first)
-npm run test:protocol              # OFFLINE: fixtures-driven MCP protocol + legacy-compat tests (needs build)
-npm run test:rate-limit            # OFFLINE: abort / 429 backoff / geo-dedupe against the HTTP funnel
-npx tsx test/integration.test.ts   # smoke test per vertical (hits live willhaben)
-npx tsx test/filters.test.ts       # asserts every filter actually narrows results
-npx tsx test/categories.test.ts    # asserts every category in constants.ts resolves live
+npm run build             # build-ui (esbuild → generated HTML module) + tsup → dist/
+npm run dev               # build-ui + tsx src/index.ts
+npm run check             # build-ui + strict tsc (generated module must exist first)
+
+npm test                  # OFFLINE default: build + parse + protocol + legacy-compat + rate-limit. No network.
+npm run test:parse        # OFFLINE: __NEXT_DATA__ extraction tiers + untrusted-text sanitizers
+npm run test:protocol     # OFFLINE: fixtures-driven MCP protocol + legacy-compat tests (needs a prior build)
+npm run test:rate-limit   # OFFLINE: abort / timeout / 403+429 backoff / redirect pacing against the HTTP funnel
+
+npm run test:live         # LIVE (hits willhaben): integration + filters
+npm run test:integration  # LIVE: smoke test per vertical
+npm run test:filters      # LIVE: asserts every filter actually narrows results
+npm run test:categories   # LIVE: asserts every category in constants.ts resolves live
 ```
 
-After editing `src/`, run `npm run check`, `npm run build`, `npm run test:protocol`, and (when
-online) at least `filters.test.ts` before claiming done. The protocol tests are hermetic: they set
-`WILLHABEN_MCP_FIXTURES=test/fixtures`, which reroutes all HTTP through recorded fixtures
-(`src/api/httpClient.ts` + `test/fixtures/routes.json`). Live tests can fail on network/markup
-drift — check before assuming a bug.
+`npm test` is the hermetic, no-network default — safe in CI, offline, or from an IP willhaben
+blocks. It builds first because the protocol/legacy suites spawn `dist/index.js`. The offline
+suites set `WILLHABEN_MCP_FIXTURES=test/fixtures`, which reroutes all HTTP through recorded
+fixtures (`src/api/httpClient.ts` + `test/fixtures/routes.json`); `test/rate-limit.test.ts`
+injects its own dispatcher instead.
+
+After editing `src/`, run `npm run check` and `npm test` before claiming done, plus (when online)
+at least `npm run test:filters`. Live tests can fail on network/markup drift — check before
+assuming a bug.
 
 ## Layout
 
@@ -95,16 +104,63 @@ drift — check before assuming a bug.
 - **Project / Bauträger ads** can appear above `price_to` in real estate — willhaben surfaces them as
   teasers. The count still reflects the filter. Don't "fix" this as a bug.
 - **Detail field is `searchResult.searchTitle`**, not `.description` (the latter is per-ad).
+- **Detail pages send neither `HEADING` nor `BODY_DYN`** (verified live, all three verticals). The
+  short heading is the top-level `ad.description`; the advert prose is the `DESCRIPTION` attribute
+  (1.4-2.1k chars on real ads); real estate splits extra narrative across `GENERAL_TEXT_ADVERT/<section>`
+  keys (Lage, Ausstattung, `Preis - Detailinformation`, …) whose suffixes are free-form German section
+  labels — not enumerable, so `isBodyAttributeKey` matches them by **prefix**; cars add `EQUIPMENT`
+  (an array of short strings, so it sanitises element-wise and needs no body treatment). Search
+  *cards* do still send `BODY_DYN` — that is why it stays in `BODY_ATTRIBUTE_KEYS`.
+  Three separate bugs came out of this one fact: `formatDetail` read `attrMap["BODY_DYN"]`, so the
+  `## Description` section never rendered on any vertical; `title: heading ?? description.substring(0, 100)`
+  turned every detail title into a 100-char slice of raw HTML once `description` began holding the body;
+  and `GENERAL_TEXT_ADVERT/*` was clipped to 200 chars as if it were an inline field. The title fallback
+  must keep the `ad.description` rung that `simplifyAdSummary` (`search.ts`) already has.
+- **"No results" and "could not parse" are different outcomes, and must stay that way.** A search
+  that matched nothing still carries a `searchResult` with `rowsFound: 0`. So `scrapeNextData` /
+  `scrapeSearchResults` **throw `WillhabenParseError`** when the page is unreadable (no
+  `__NEXT_DATA__`, unparseable JSON, `is404`, or no search result in a page that parsed) rather than
+  returning null. Never reintroduce a `if (!result) return { total: 0 }` branch — that is exactly what
+  made markup drift and bot-check pages look like an empty market. `scrapeAdDetail` still returns
+  `null`, but now with one unambiguous meaning: the page was read and holds no ad (expired/removed).
+- **`__NEXT_DATA__` extraction is string-scan first, cheerio second.** `cheerio.load` parses the whole
+  document (25-96 ms) to read one script tag; `indexOf`/`substring` does it in under 3 ms. The DOM tier
+  is a genuine fallback for markup the scan misses (e.g. single-quoted attributes), not a stricter
+  re-run of the same path — the old "fallback" could never rescue anything. Covered by `test/parse.test.ts`.
 
 ## Invariants — keep these intact
 
 - Rate limit **1 req/sec** (`RATE_LIMIT_PER_SEC`) and **5-min cache** (`CACHE_TTL_MS`). Don't raise to
-  enable bulk fetching. Row count stays capped at 100 in `server.ts`.
+  enable bulk fetching. Row count stays capped at 100 in `server.ts`. **Every redirect hop takes its own
+  dispatch slot** — hops used to ride free inside one slot, which doubled the real rate on any 302 pair.
+- **Every fetch carries a timeout** (`FETCH_TIMEOUT_MS`, per hop). The dispatch mutex serialises all
+  willhaben I/O, so without it a single hung socket freezes every tool call in the process. A timeout
+  must surface as `WillhabenTimeoutError`, **never** as an `AbortError`: `server.ts` rethrows abort
+  errors as MCP cancellations, so a timeout misreported that way returns silence instead of an error.
+- **A bare 403 or 429 counts as a block**, with an exponential, jittered, process-wide cooldown
+  (`BLOCK_BACKOFF_BASE_MS`, reset on any response < 400). A header-less block must never be free —
+  that is how deep search used to walk into a WAF eight more times and return a non-error result.
+- **Everything in `formatters.ts` is attacker-authored.** Anyone can post a listing, so every title,
+  price, attribute and description is untrusted text heading into a model's context. Route inline
+  fields through `safeInline`, bodies through `safeBlock` (rendered inside a fence), and links through
+  `safeUrl`; keep `UNTRUSTED_NOTE` above rendered advert text. Never interpolate a listing field raw.
+  Both sanitizers strip the HTML adverts are written in (`stripHtml`, a linear scan -- the regex form
+  backtracks quadratically on the unclosed tags an advertiser supplies for free) before the control,
+  backtick and length passes, so those defenses still run on the result. Live bodies shrink ~10-33%
+  and read as prose. `&lt;`/`&gt;` decode to a **space**, never to a raw angle bracket: decoding them
+  faithfully would let escaped markup reconstitute a tag after `stripHtml` has already run. Truncation
+  counts prose, not markup -- a body that is half tags is not truncated when its text fits.
 - Deep search returns at most `DEEP_SEARCH_LISTINGS_CAP` (20) ranked listings. Returning every
   scanned listing (~60-90 with full attribute maps) blew past per-tool-result token caps in MCP
   clients at default parameters; `scanned_listings` still reports the full count. Relatedly,
   `stripRedundantAttributes` (`search.ts`) drops six attribute keys that duplicate top-level
   fields or are internal IDs — all four verticals' simplifiers apply it; keep it that way.
+- **Fixtures must match live pages, not the code.** `test/fixtures/detail.html` once carried a
+  `BODY_DYN` attribute, and later a `HEADING` attribute, that willhaben does not send. Both times the
+  offline suite went green over a real defect (a `## Description` section that never rendered; then a
+  title replaced by advert prose). Re-record from a live page when a shape changes, and never add a
+  field to a fixture just to make an assertion pass. Relatedly, assertions about a bound must name the
+  constant (`MAX_BODY_CHARS + 40`), never a hardcoded number — a literal silently stops tracking it.
 - The version lives in **three** places that must stay in sync: `package.json`,
   `SERVER_VERSION` in `server.ts`, and the `App` constructor in `ui/app.js`.
 - Keep the legal disclaimers (`DISCLAIMER.md`, README "Legal & Responsible Use", LICENSE notice) and the
@@ -119,9 +175,24 @@ drift — check before assuming a bug.
 
 ## Adding a filter (checklist)
 
-1. Add the field to the tool's input schema in `schemas.ts` and pass it through to the search fn
-   in the tool handler in `server.ts`.
-2. Map it to the **verified** willhaben query param in `search.ts` (confirm the param name against a
-   live result-count change before trusting it).
-3. It flows to the URL automatically via `buildQuery` — no `constants.ts` change needed.
-4. Add an assertion in `test/filters.test.ts` that the filter narrows the result count.
+A filter has to be declared **twice** (vertical tool + deep search) and typed in **two** interfaces.
+Miss a step and it works everywhere except one tool — silently, since unknown params are just dropped.
+
+1. `src/schemas.ts` — add the field to the vertical's input schema **and** to `deepSearchInputSchema`
+   (which re-declares every vertical field; keep the `.describe()` text identical between the two).
+2. `src/api/types.ts` — add it to the vertical's `*SearchInput` interface (`SearchInput`,
+   `RealEstateSearchInput`, `CarSearchInput`). Two live elsewhere: `MarketplaceSearchInput` in
+   `src/api/search.ts`, and the jobs input is an inline type on `searchJobs` in `src/api/jobs.ts`.
+3. `src/api/deepsearch.ts` — **two sites**: add it to `DeepSearchInput`, *and* forward it in that
+   vertical's branch of `searchDeepPage`. The `shared` object only covers
+   location/area_id/price/sort/rows/page; everything else is listed per vertical.
+4. `src/server.ts` — add it to the vertical tool handler's explicit `search*({ … })` call. The
+   deep-search handler spreads `...params`, so it needs no change there.
+5. `src/api/search.ts` — map it to the **verified** willhaben query param in that vertical's search
+   fn (confirm the param name against a live result-count change before trusting it). Cars go
+   through `CAR_FILTER_PARAMS` in `constants.ts` — add the mapping there instead.
+6. It flows to the URL automatically via `buildQuery` — no other `constants.ts` change needed.
+7. `test/filters.test.ts` — assert the filter actually narrows the result count (live test).
+8. If the natural-language flows should map it, mention it in the `willhaben-search` prompt text in
+   `server.ts` and in `.claude/commands/willhaben-search.md` /
+   `.claude/skills/apartment-hunt/SKILL.md` — those enumerate the params they pass through.

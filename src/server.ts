@@ -30,10 +30,17 @@ import { z } from "zod";
 import { searchListings, searchRealEstate, searchCars, searchMarketplace } from "./api/search.js";
 import { searchJobs } from "./api/jobs.js";
 import { getListingDetail } from "./api/detail.js";
-import { deepSearch, DEEP_SEARCH_MAX_PAGES, DEEP_SEARCH_MAX_DETAILS } from "./api/deepsearch.js";
+import {
+  deepSearch,
+  DEEP_SEARCH_MAX_PAGES,
+  DEEP_SEARCH_MAX_DETAILS,
+  DEEP_SEARCH_DEFAULT_PAGES,
+  DEEP_SEARCH_DEFAULT_DETAILS,
+  DEEP_SEARCH_LISTINGS_CAP,
+} from "./api/deepsearch.js";
 import { resolveLocationDetailed, rememberLocationChoice, type AreaCandidate } from "./api/geo.js";
 import { REAL_ESTATE_CATEGORIES, MARKETPLACE_CATEGORIES } from "./utils/constants.js";
-import { formatSearchResults, formatDetail, formatCategories, formatListings } from "./utils/formatters.js";
+import { formatSearchResults, formatDetail, formatCategories, formatListings, safeInline, UNTRUSTED_NOTE } from "./utils/formatters.js";
 import {
   searchInputSchema,
   realEstateInputSchema,
@@ -364,6 +371,7 @@ export function createServer(): McpServer {
       if (outcome.status === "cancelled") return CANCELLED_RESULT;
 
       const result = await searchRealEstate({
+        keyword: params.keyword,
         property_type: params.property_type,
         action: params.action,
         location: params.location,
@@ -402,6 +410,7 @@ export function createServer(): McpServer {
       if (outcome.status === "cancelled") return CANCELLED_RESULT;
 
       const result = await searchCars({
+        keyword: params.keyword,
         make: params.make,
         model: params.model,
         location: params.location,
@@ -494,8 +503,8 @@ export function createServer(): McpServer {
     {
       title: "Deep search (scan + rank + details)",
       description:
-        `Thorough search in one call: scans up to ${DEEP_SEARCH_MAX_PAGES} result pages, deduplicates and ranks all listings (e.g. by €/m² for real estate), then fetches full details for the top ${DEEP_SEARCH_MAX_DETAILS} matches. ` +
-        "Runs at the polite built-in rate limit (~1 request/second), so expect roughly one second per page/detail; progress is reported while it works. Ideal for apartment hunting and bargain scanning.",
+        `Thorough search in one call: scans result pages (default ${DEEP_SEARCH_DEFAULT_PAGES}, max ${DEEP_SEARCH_MAX_PAGES}), deduplicates and ranks all listings (e.g. by €/m² for real estate), then fetches full details for the top matches (default ${DEEP_SEARCH_DEFAULT_DETAILS}, max ${DEEP_SEARCH_MAX_DETAILS}). Returns the top ${DEEP_SEARCH_LISTINGS_CAP} ranked listings; \`scanned_listings\` reports how many were actually ranked. ` +
+        `Runs at the polite built-in rate limit (~1 request/second): defaults are ${DEEP_SEARCH_DEFAULT_PAGES} pages + ${DEEP_SEARCH_DEFAULT_DETAILS} details ≈ ${DEEP_SEARCH_DEFAULT_PAGES + DEEP_SEARCH_DEFAULT_DETAILS} seconds; max is ${DEEP_SEARCH_MAX_PAGES} + ${DEEP_SEARCH_MAX_DETAILS} ≈ ${DEEP_SEARCH_MAX_PAGES + DEEP_SEARCH_MAX_DETAILS} seconds. Details use each listing's canonical URL (one request); looking up by ad id still follows a redirect. Progress is reported while it works. Ideal for apartment hunting and bargain scanning.`,
       inputSchema: deepSearchInputSchema,
       outputSchema: deepSearchResultSchema,
       annotations: READ_ONLY,
@@ -540,18 +549,23 @@ export function createServer(): McpServer {
         ranked_by: result.ranked_by,
         listings: result.listings,
         details: result.details,
+        ...(result.notice !== undefined ? { notice: result.notice } : {}),
       };
 
       const text = [
-        `## Deep Search${result.description ? `: ${result.description}` : ""}`,
+        `## Deep Search${result.description ? `: ${safeInline(result.description, 120)}` : ""}`,
         "",
         `Scanned **${result.scanned_pages}** page(s) → **${result.scanned_listings}** distinct listings (of ${result.total.toLocaleString()} total), ranked by **${result.ranked_by}**. Full details fetched for the top **${result.details.length}**.`,
         ...(outcome.note ? [`ℹ️ ${outcome.note}`] : []),
+        ...(result.notice ? [`⚠️ ${result.notice}`] : []),
+        "",
+        UNTRUSTED_NOTE,
         "",
         "### Top matches",
         formatListings(result.listings),
-        "",
-        `Full attribute sets, images, seller and address info for the top ${result.details.length} listings are in \`structuredContent.details\`.`,
+        ...(result.details.length > 0
+          ? ["", "### Details", "", result.details.map((detail) => formatDetail(detail)).join("\n\n---\n\n")]
+          : []),
       ].join("\n");
 
       return { content: [{ type: "text", text }], structuredContent: payload };

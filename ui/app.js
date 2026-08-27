@@ -243,6 +243,14 @@ function renderGallery(payload) {
   return wrap;
 }
 
+// Display-only excerpt for the detail card. The *security* bound on advert prose
+// is MAX_BODY_CHARS in src/utils/formatters.ts, applied server-side before this
+// text ever reaches the iframe -- this number only decides how much of an already
+// sanitised description a card shows before it gets unwieldy. Do not mistake it
+// for a safety limit, and keep it above the longest bodies seen live (~2k chars)
+// so real listings are shown whole.
+const DESCRIPTION_EXCERPT_CHARS = 2400;
+
 const DETAIL_ATTR_LABELS = [
   ["ESTATE_SIZE/LIVING_AREA", "Living area", " m²"],
   ["NUMBER_OF_ROOMS", "Rooms", ""],
@@ -325,7 +333,10 @@ function renderDetail(listing) {
 
   if (listing.description) {
     const desc = el("p", "wh-description");
-    desc.textContent = listing.description.length > 1200 ? listing.description.slice(0, 1200) + "…" : listing.description;
+    desc.textContent =
+      listing.description.length > DESCRIPTION_EXCERPT_CHARS
+        ? listing.description.slice(0, DESCRIPTION_EXCERPT_CHARS) + "…"
+        : listing.description;
     wrap.appendChild(desc);
   }
 

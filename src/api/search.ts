@@ -10,6 +10,7 @@ import {
 } from "./types.js";
 import { scrapeSearchResults } from "./scraper.js";
 import { resolveLocationToAreaId } from "./geo.js";
+import { sanitizeListing } from "../utils/formatters.js";
 import {
   SEARCH_URL_PATTERNS,
   SORT_CODES,
@@ -84,7 +85,7 @@ export function simplifyAdSummary(ad: WillhabenAdSummary): SimplifiedListing {
 
   const parsedPrice = priceNumber ? parseFloat(priceNumber) : NaN;
 
-  return {
+  return sanitizeListing({
     id: ad.id,
     title: heading ?? ad.description ?? "",
     price: priceForDisplay ?? null,
@@ -97,7 +98,7 @@ export function simplifyAdSummary(ad: WillhabenAdSummary): SimplifiedListing {
     vertical: VERTICAL_NAMES[ad.verticalId] ?? String(ad.verticalId),
     is_private: isPrivate === "1",
     advertiser_name: orgName ?? null,
-  };
+  });
 }
 
 /**
@@ -171,16 +172,6 @@ export async function searchListings(input: SearchInput) {
 
   const urlPath = SEARCH_URL_PATTERNS[verticalId](params);
   const { result } = await scrapeSearchResults(urlPath);
-
-  if (!result) {
-    return {
-      total: 0,
-      page,
-      rows_per_page: rows,
-      listings: [],
-      vertical: verticalName,
-    };
-  }
 
   const listings = (result.advertSummaryList?.advertSummary ?? []).map(simplifyAdSummary);
 
@@ -285,10 +276,6 @@ export async function searchRealEstate(input: RealEstateSearchInput) {
   const urlPath = SEARCH_URL_PATTERNS[VerticalId.IMMOBILIEN]({ ...params, category: categoryPath });
   const { result } = await scrapeSearchResults(urlPath);
 
-  if (!result) {
-    return { total: 0, page, rows_per_page: rows, listings: [], vertical: "real_estate" };
-  }
-
   const listings = (result.advertSummaryList?.advertSummary ?? []).map(simplifyAdSummary);
 
   return {
@@ -363,10 +350,6 @@ export async function searchCars(input: CarSearchInput) {
   const urlPath = SEARCH_URL_PATTERNS[VerticalId.AUTO_MOTOR](params);
   const { result } = await scrapeSearchResults(urlPath);
 
-  if (!result) {
-    return { total: 0, page, rows_per_page: rows, listings: [], vertical: "cars" };
-  }
-
   const listings = (result.advertSummaryList?.advertSummary ?? []).map(simplifyAdSummary);
 
   return {
@@ -438,10 +421,6 @@ export async function searchMarketplace(input: MarketplaceSearchInput = {}) {
 
   const urlPath = SEARCH_URL_PATTERNS[VerticalId.MARKTPLATZ]({ ...params, category: category ?? "" });
   const { result } = await scrapeSearchResults(urlPath);
-
-  if (!result) {
-    return { total: 0, page, rows_per_page: rows, listings: [], vertical: "marketplace" };
-  }
 
   const listings = (result.advertSummaryList?.advertSummary ?? []).map(simplifyAdSummary);
 
